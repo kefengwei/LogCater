@@ -32,33 +32,12 @@ void MainWindow::triggerUpdateCheck() {
         });
 }
 
-void MainWindow::startUpdateDownload() {
-    if (m_updateDownloading) return;
-    m_updateDownloading = true;
-    m_updateError.clear();
-
-    UpdateChecker::downloadAndInstall(
-        m_updateInfo.downloadUrl,
-        m_updateInfo.assetDownloadUrl,
-        [this](const std::string& status, float progress) {
-            std::lock_guard<std::mutex> lock(m_updateMutex);
-            m_updateStatus = status;
-            m_updateProgress = progress;
-        },
-        [this](bool success, const std::string& error) {
-            std::lock_guard<std::mutex> lock(m_updateMutex);
-            if (success) {
-                // The updater batch script will handle the swap and restart.
-                // Exit the application.
-                m_updateStatus = "Restarting...";
-                m_updateProgress = 1.0f;
-                // Post exit to happen on next frame
-                exit(0);
-            } else {
-                m_updateError = error;
-                m_updateDownloading = false;
-            }
-        });
+void MainWindow::openReleasePage() {
+    std::string url = m_updateInfo.downloadUrl;
+    if (url.empty()) {
+        url = "https://github.com/kefengwei/LogCater/releases";
+    }
+    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOW);
 }
 
 void MainWindow::render(Application& app) {
@@ -108,11 +87,11 @@ void MainWindow::render(Application& app) {
             ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "|");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                               "Update available: %s",
+                               "New version: %s",
                                m_updateInfo.latestVersion.c_str());
             ImGui::SameLine();
-            if (ImGui::SmallButton("Download")) {
-                startUpdateDownload();
+            if (ImGui::SmallButton("Open Release Page")) {
+                openReleasePage();
             }
         }
 
@@ -194,6 +173,12 @@ void MainWindow::render(Application& app) {
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("Help")) {
+            m_activeTab = 4;
+            m_helpPanel.render();
+            ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
     }
 
@@ -225,43 +210,12 @@ void MainWindow::render(Application& app) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
                            "New version: %s", m_updateInfo.latestVersion.c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Update")) {
-            startUpdateDownload();
+        if (ImGui::SmallButton("Open Release Page")) {
+            openReleasePage();
         }
     }
 
     ImGui::End();
-
-    // --- Update progress popup ---
-    if (m_updateDownloading || !m_updateError.empty()) {
-        ImGui::OpenPopup("Updating LogCater");
-    }
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(350, 150), ImGuiCond_Appearing);
-
-    if (ImGui::BeginPopupModal("Updating LogCater", nullptr,
-                               ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-        if (!m_updateError.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error:");
-            ImGui::TextWrapped("%s", m_updateError.c_str());
-            ImGui::Separator();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
-                ImGui::CloseCurrentPopup();
-                m_updateError.clear();
-            }
-        } else {
-            std::lock_guard<std::mutex> lock(m_updateMutex);
-            ImGui::TextUnformatted(m_updateStatus.c_str());
-            if (m_updateProgress >= 0.0f) {
-                ImGui::ProgressBar(m_updateProgress, ImVec2(-1, 0));
-            } else {
-                // Indeterminate: animated bar
-                ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 0));
-            }
-        }
-        ImGui::EndPopup();
-    }
 
     // Save window position/size
     ImVec2 pos = ImGui::GetWindowPos();

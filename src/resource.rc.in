@@ -1,0 +1,37 @@
+#include <winres.h>
+
+// === Version info ===
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     ${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0
+PRODUCTVERSION  ${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+FILEFLAGS       VS_FF_DEBUG
+#else
+FILEFLAGS       0
+#endif
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"  // US English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "LogCater"
+            VALUE "FileDescription",  "Android Logcat Viewer & Device Manager"
+            VALUE "FileVersion",      "${PROJECT_VERSION}"
+            VALUE "InternalName",     "logcater"
+            VALUE "LegalCopyright",   "MIT License"
+            VALUE "OriginalFilename", "logcater.exe"
+            VALUE "ProductName",      "LogCater"
+            VALUE "ProductVersion",   "${PROJECT_VERSION}"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200  // US English, Unicode
+    END
+END
+
+// === Manifest: mark as modern Windows app, request asInvoker (no admin needed) ===
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "logcater.manifest"

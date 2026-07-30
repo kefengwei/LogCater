@@ -5,6 +5,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Extract version components
+set(PROJECT_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(PROJECT_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(PROJECT_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+
 # Release build by default
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -61,7 +66,11 @@ target_link_libraries(imgui PUBLIC glfw)
 # --- LogCater application ---
 file(GLOB_RECURSE SOURCES src/*.cpp src/*.h)
 
-add_executable(logcater WIN32 ${SOURCES})
+# Configure Windows resource files with version info
+configure_file(src/resource.rc.in ${CMAKE_CURRENT_BINARY_DIR}/resource.rc @ONLY)
+configure_file(src/logcater.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/logcater.manifest @ONLY)
+
+add_executable(logcater WIN32 ${SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/resource.rc)
 
 target_include_directories(logcater PRIVATE
     ${CMAKE_SOURCE_DIR}/src
@@ -76,7 +85,7 @@ target_link_libraries(logcater PRIVATE
     winhttp
 )
 
-# Version for auto-update
+# Version for auto-update check
 target_compile_definitions(logcater PRIVATE
     LOGCATER_VERSION="${PROJECT_VERSION}"
 )

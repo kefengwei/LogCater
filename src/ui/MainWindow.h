@@ -5,10 +5,10 @@
 #include "ui/DropboxPanel.h"
 #include "ui/FileBrowserPanel.h"
 #include "ui/AppInfoPanel.h"
+#include "ui/HelpPanel.h"
 #include "core/UpdateChecker.h"
 #include <string>
 #include <atomic>
-#include <mutex>
 
 class Application;
 
@@ -24,6 +24,7 @@ private:
     DropboxPanel m_dropboxPanel;
     FileBrowserPanel m_fileBrowserPanel;
     AppInfoPanel m_appInfoPanel;
+    HelpPanel m_helpPanel;
     int m_activeTab = 0;
     bool m_firstFrame = true;
 
@@ -31,12 +32,5 @@ private:
     UpdateChecker::UpdateInfo m_updateInfo;
     std::atomic<bool> m_updateCheckDone{false};
     void triggerUpdateCheck();
-    void startUpdateDownload();
-
-    // Download progress state
-    bool m_updateDownloading = false;
-    std::string m_updateStatus;
-    float m_updateProgress = 0.0f;
-    std::string m_updateError;
-    std::mutex m_updateMutex;
+    void openReleasePage();
 };

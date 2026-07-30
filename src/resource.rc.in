@@ -2,8 +2,8 @@
 
 // === Version info ===
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     ${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0
-PRODUCTVERSION  ${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0
+FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 #ifdef _DEBUG
 FILEFLAGS       VS_FF_DEBUG
@@ -19,12 +19,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "LogCater"
             VALUE "FileDescription",  "Android Logcat Viewer & Device Manager"
-            VALUE "FileVersion",      "${PROJECT_VERSION}"
+            VALUE "FileVersion",      "@PROJECT_VERSION@"
             VALUE "InternalName",     "logcater"
             VALUE "LegalCopyright",   "MIT License"
             VALUE "OriginalFilename", "logcater.exe"
             VALUE "ProductName",      "LogCater"
-            VALUE "ProductVersion",   "${PROJECT_VERSION}"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@"
         END
     END
     BLOCK "VarFileInfo"

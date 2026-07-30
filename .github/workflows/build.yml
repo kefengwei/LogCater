@@ -21,11 +21,28 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Download Android platform-tools
+        run: |
+          curl -L -o platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+          7z x platform-tools.zip -oplatform-tools
+          mkdir build\Release\adb
+          copy platform-tools\platform-tools\adb.exe build\Release\adb\
+          copy platform-tools\platform-tools\AdbWinApi.dll build\Release\adb\
+          copy platform-tools\platform-tools\AdbWinUsbApi.dll build\Release\adb\
+        shell: cmd
+
+      - name: Stage release package
+        run: |
+          mkdir stage
+          copy build\Release\logcater.exe stage\
+          xcopy /E /I build\Release\adb stage\adb
+        shell: cmd
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: logcater
-          path: build/Release/logcater.exe
+          path: stage\
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -39,9 +56,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: logcater
+          path: logcater
+
+      - name: Package zip
+        run: |
+          cd logcater
+          zip -r ../LogCater.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: logcater.exe
+          files: LogCater.zip
           generate_release_notes: true

@@ -13,12 +13,25 @@ std::string AdbProcess::findAdbPath() {
 #endif
 
     // Check Android SDK default location
-    const char* localAppData = nullptr;
     char buf[MAX_PATH];
     if (GetEnvironmentVariableA("LOCALAPPDATA", buf, sizeof(buf))) {
         std::string sdkPath = std::string(buf) + "\\Android\\Sdk\\platform-tools\\adb.exe";
         if (GetFileAttributesA(sdkPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
             g_adbPath = sdkPath;
+            return g_adbPath;
+        }
+    }
+
+    // Check bundled adb (next to the executable)
+    if (GetModuleFileNameA(nullptr, buf, sizeof(buf))) {
+        std::string exeDir(buf);
+        size_t lastSlash = exeDir.find_last_of("\\/");
+        if (lastSlash != std::string::npos) {
+            exeDir = exeDir.substr(0, lastSlash);
+        }
+        std::string bundledPath = exeDir + "\\adb\\adb.exe";
+        if (GetFileAttributesA(bundledPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            g_adbPath = bundledPath;
             return g_adbPath;
         }
     }

@@ -91,6 +91,9 @@ target_compile_definitions(logcater PRIVATE
     LOGCATER_VERSION="${PROJECT_VERSION}"
 )
 
+# Disable linker-generated manifest — we provide our own via resource.rc
+target_link_options(logcater PRIVATE "/MANIFEST:NO")
+
 # Find adb.exe at configure time
 find_program(ADB_EXECUTABLE adb)
 if(ADB_EXECUTABLE)

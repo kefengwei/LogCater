@@ -298,37 +298,46 @@ void UpdateChecker::downloadAndInstall(const std::string& url,
             return;
         }
 
-        // Step 3: Create updater batch script
+        // Step 3: Spawn detached updater process via cmd.exe /c
         onStatus("Installing...", -1.0f);
 
-        std::string batchPath = std::string(tempDir) + "LogCaterUpdater.bat";
-        std::ofstream batch(batchPath);
-        if (!batch.is_open()) {
-            onDone(false, "Failed to create updater script.");
+        // Build a single command that: waits for us to exit → copies files → cleans up → restarts
+        // Using CreateProcess with cmd /c avoids writing a .bat file (no file-based injection risk).
+        std::string cmd;
+        cmd += "cmd /c \"";
+        cmd += "timeout /t 2 /nobreak >nul && ";
+        cmd += "xcopy /E /Y /Q \\\"" + contentDir + "\\*\\\" \\\"" + appDir + "\\\" && ";
+        cmd += "del /Q \\\"" + zipPath + "\\\" 2>nul && ";
+        cmd += "rmdir /S /Q \\\"" + extractDir + "\\\" 2>nul && ";
+        cmd += "start \\\"\\\" \\\"" + appDir + "\\logcater.exe\\\"";
+        cmd += "\"";
+
+        // Sanity check: no newlines or other suspicious characters in the paths
+        // (paths come from GetTempPathA / GetModuleFileNameA — system APIs, safe in practice)
+        auto pathOk = [](const std::string& s) {
+            return s.find_first_of("\r\n&|^<>!@`$") == std::string::npos;
+        };
+        if (!pathOk(contentDir) || !pathOk(appDir) || !pathOk(zipPath) || !pathOk(extractDir)) {
+            onDone(false, "Path contains unsafe characters. Please update manually.");
             return;
         }
-
-        batch << "@echo off\r\n";
-        batch << "rem Wait for LogCater to exit\r\n";
-        batch << "timeout /t 2 /nobreak >nul\r\n";
-        batch << "echo Updating LogCater...\r\n";
-        // Copy new files
-        batch << "xcopy /E /Y /Q \"" << contentDir << "\\*\" \"" << appDir << "\\\"\r\n";
-        // Clean up temp files
-        batch << "del /Q \"" << zipPath << "\" 2>nul\r\n";
-        batch << "rmdir /S /Q \"" << extractDir << "\" 2>nul\r\n";
-        batch << "del /Q \"" << batchPath << "\" 2>nul\r\n";
-        // Restart
-        batch << "echo Starting LogCater...\r\n";
-        batch << "start \"\" \"" << appDir << "\\logcater.exe\"\r\n";
-        batch.close();
 
         // Step 4: Launch updater and exit
         onStatus("Restarting...", 1.0f);
 
-        // Launch the batch file detached
-        ShellExecuteA(nullptr, "open", batchPath.c_str(),
-                      nullptr, nullptr, SW_HIDE);
+        STARTUPINFOA si = {};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION pi = {};
+
+        std::vector<char> cmdBuf(cmd.begin(), cmd.end());
+        cmdBuf.push_back('\0');
+
+        CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
 
         onDone(true, "");
     }).detach();

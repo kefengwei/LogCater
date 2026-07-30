@@ -27,8 +27,37 @@ void MainWindow::triggerUpdateCheck() {
     m_updateCheckDone.store(true);
 
     UpdateChecker::check(STRINGIFY(LOGCATER_VERSION),
-        [this](UpdateChecker::UpdateInfo info) {
+        [this](const UpdateChecker::UpdateInfo& info) {
             m_updateInfo = info;
+        });
+}
+
+void MainWindow::startUpdateDownload() {
+    if (m_updateDownloading) return;
+    m_updateDownloading = true;
+    m_updateError.clear();
+
+    UpdateChecker::downloadAndInstall(
+        m_updateInfo.downloadUrl,
+        m_updateInfo.assetDownloadUrl,
+        [this](const std::string& status, float progress) {
+            std::lock_guard<std::mutex> lock(m_updateMutex);
+            m_updateStatus = status;
+            m_updateProgress = progress;
+        },
+        [this](bool success, const std::string& error) {
+            std::lock_guard<std::mutex> lock(m_updateMutex);
+            if (success) {
+                // The updater batch script will handle the swap and restart.
+                // Exit the application.
+                m_updateStatus = "Restarting...";
+                m_updateProgress = 1.0f;
+                // Post exit to happen on next frame
+                exit(0);
+            } else {
+                m_updateError = error;
+                m_updateDownloading = false;
+            }
         });
 }
 
@@ -83,8 +112,7 @@ void MainWindow::render(Application& app) {
                                m_updateInfo.latestVersion.c_str());
             ImGui::SameLine();
             if (ImGui::SmallButton("Download")) {
-                ShellExecuteA(nullptr, "open", m_updateInfo.downloadUrl.c_str(),
-                             nullptr, nullptr, SW_SHOWNORMAL);
+                startUpdateDownload();
             }
         }
 
@@ -92,7 +120,6 @@ void MainWindow::render(Application& app) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                            "LogCater v" STRINGIFY(LOGCATER_VERSION));
 
-        // Manual check button
         ImGui::SameLine();
         if (ImGui::SmallButton("?")) {
             m_updateCheckDone.store(false);
@@ -106,11 +133,9 @@ void MainWindow::render(Application& app) {
 
     // --- Tab bar ---
     if (ImGui::BeginTabBar("MainTabs")) {
-        // === Logcat Tab ===
         if (ImGui::BeginTabItem("Logcat")) {
             m_activeTab = 0;
             auto selected = dm.selectedDevice();
-
             if (!selected.has_value()) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                                    "Please select a device to start logcat.");
@@ -127,11 +152,9 @@ void MainWindow::render(Application& app) {
             ImGui::EndTabItem();
         }
 
-        // === Dropbox Tab ===
         if (ImGui::BeginTabItem("Dropbox")) {
             m_activeTab = 1;
             auto selected = dm.selectedDevice();
-
             if (!selected.has_value()) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                                    "Please select a device to view dropbox entries.");
@@ -144,7 +167,6 @@ void MainWindow::render(Application& app) {
         if (ImGui::BeginTabItem("Files")) {
             m_activeTab = 2;
             auto selected = dm.selectedDevice();
-
             if (!selected.has_value()) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                                    "Please select a device to browse files.");
@@ -160,11 +182,9 @@ void MainWindow::render(Application& app) {
             ImGui::EndTabItem();
         }
 
-        // === Apps Tab ===
         if (ImGui::BeginTabItem("Apps")) {
             m_activeTab = 3;
             auto selected = dm.selectedDevice();
-
             if (!selected.has_value()) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                                    "Please select a device to view apps.");
@@ -198,7 +218,6 @@ void MainWindow::render(Application& app) {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Logcat: Stopped");
     }
 
-    // Update notification in status bar too
     if (m_updateInfo.hasUpdate) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
@@ -206,13 +225,43 @@ void MainWindow::render(Application& app) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
                            "New version: %s", m_updateInfo.latestVersion.c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Open")) {
-            ShellExecuteA(nullptr, "open", m_updateInfo.downloadUrl.c_str(),
-                         nullptr, nullptr, SW_SHOWNORMAL);
+        if (ImGui::SmallButton("Update")) {
+            startUpdateDownload();
         }
     }
 
     ImGui::End();
+
+    // --- Update progress popup ---
+    if (m_updateDownloading || !m_updateError.empty()) {
+        ImGui::OpenPopup("Updating LogCater");
+    }
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(350, 150), ImGuiCond_Appearing);
+
+    if (ImGui::BeginPopupModal("Updating LogCater", nullptr,
+                               ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+        if (!m_updateError.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error:");
+            ImGui::TextWrapped("%s", m_updateError.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("OK", ImVec2(120, 0))) {
+                ImGui::CloseCurrentPopup();
+                m_updateError.clear();
+            }
+        } else {
+            std::lock_guard<std::mutex> lock(m_updateMutex);
+            ImGui::TextUnformatted(m_updateStatus.c_str());
+            if (m_updateProgress >= 0.0f) {
+                ImGui::ProgressBar(m_updateProgress, ImVec2(-1, 0));
+            } else {
+                // Indeterminate: animated bar
+                ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 0));
+            }
+        }
+        ImGui::EndPopup();
+    }
 
     // Save window position/size
     ImVec2 pos = ImGui::GetWindowPos();

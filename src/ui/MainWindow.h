@@ -8,6 +8,7 @@
 #include "core/UpdateChecker.h"
 #include <string>
 #include <atomic>
+#include <mutex>
 
 class Application;
 
@@ -30,4 +31,12 @@ private:
     UpdateChecker::UpdateInfo m_updateInfo;
     std::atomic<bool> m_updateCheckDone{false};
     void triggerUpdateCheck();
+    void startUpdateDownload();
+
+    // Download progress state
+    bool m_updateDownloading = false;
+    std::string m_updateStatus;
+    float m_updateProgress = 0.0f;
+    std::string m_updateError;
+    std::mutex m_updateMutex;
 };

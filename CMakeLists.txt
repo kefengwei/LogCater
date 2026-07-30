@@ -69,6 +69,7 @@ file(GLOB_RECURSE SOURCES src/*.cpp src/*.h)
 # Configure Windows resource files with version info
 configure_file(src/resource.rc.in ${CMAKE_CURRENT_BINARY_DIR}/resource.rc @ONLY)
 configure_file(src/logcater.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/logcater.manifest @ONLY)
+configure_file(src/logcater.ico ${CMAKE_CURRENT_BINARY_DIR}/logcater.ico COPYONLY)
 
 add_executable(logcater WIN32 ${SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/resource.rc)
 

@@ -12,3 +12,5 @@ Thumbs.db
 
 # CMake generated
 CMakeUserPresets.json
+build_vs/
+scripts/icon_*.png

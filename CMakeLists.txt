@@ -73,6 +73,12 @@ target_link_libraries(logcater PRIVATE
     nlohmann_json::nlohmann_json
     opengl32
     comdlg32
+    winhttp
+)
+
+# Version for auto-update
+target_compile_definitions(logcater PRIVATE
+    LOGCATER_VERSION="${PROJECT_VERSION}"
 )
 
 # Find adb.exe at configure time

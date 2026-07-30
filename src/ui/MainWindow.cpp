@@ -2,7 +2,16 @@
 #include "Application.h"
 #include "adb/DeviceManager.h"
 #include "core/Settings.h"
+#include "core/UpdateChecker.h"
 #include "imgui.h"
+#include <Windows.h>
+#include <shellapi.h>
+
+#ifndef LOGCATER_VERSION
+#define LOGCATER_VERSION "0.0.0"
+#endif
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
 
 MainWindow::MainWindow() {
     m_deviceSelector.setOnDeviceChanged([this](const std::string& serial) {
@@ -11,6 +20,16 @@ MainWindow::MainWindow() {
             m_logcatPanel.start(serial);
         }
     });
+}
+
+void MainWindow::triggerUpdateCheck() {
+    if (m_updateCheckDone.load()) return;
+    m_updateCheckDone.store(true);
+
+    UpdateChecker::check(STRINGIFY(LOGCATER_VERSION),
+        [this](UpdateChecker::UpdateInfo info) {
+            m_updateInfo = info;
+        });
 }
 
 void MainWindow::render(Application& app) {
@@ -25,6 +44,7 @@ void MainWindow::render(Application& app) {
         if (settings.mainWindowWidth > 0 && settings.mainWindowHeight > 0) {
             ImGui::SetWindowSize(ImVec2(settings.mainWindowWidth, settings.mainWindowHeight));
         }
+        triggerUpdateCheck();
     }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -52,8 +72,35 @@ void MainWindow::render(Application& app) {
         ImGui::TextUnformatted("Device:");
         ImGui::SameLine();
         m_deviceSelector.render(dm, 220.0f);
-        ImGui::SameLine(ImGui::GetWindowWidth() - 120);
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "LogCater v1.0");
+
+        // Update notification
+        if (m_updateInfo.hasUpdate) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "|");
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                               "Update available: %s",
+                               m_updateInfo.latestVersion.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Download")) {
+                ShellExecuteA(nullptr, "open", m_updateInfo.downloadUrl.c_str(),
+                             nullptr, nullptr, SW_SHOWNORMAL);
+            }
+        }
+
+        ImGui::SameLine(ImGui::GetWindowWidth() - 130);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                           "LogCater v" STRINGIFY(LOGCATER_VERSION));
+
+        // Manual check button
+        ImGui::SameLine();
+        if (ImGui::SmallButton("?")) {
+            m_updateCheckDone.store(false);
+            triggerUpdateCheck();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Check for updates");
+
         ImGui::EndMenuBar();
     }
 
@@ -68,12 +115,10 @@ void MainWindow::render(Application& app) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                                    "Please select a device to start logcat.");
             } else {
-                // Ensure dm is set and process map is refreshed (once)
                 m_logcatPanel.setDeviceManager(&dm);
                 if (!m_logcatPanel.isRunning()) {
                     m_logcatPanel.start(selected->serial);
                 }
-                // Refresh process map on first frame after device selection
                 if (!dm.processMapReady()) {
                     dm.refreshProcessMap(selected->serial);
                 }
@@ -151,6 +196,20 @@ void MainWindow::render(Application& app) {
         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Logcat: Running");
     } else {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Logcat: Stopped");
+    }
+
+    // Update notification in status bar too
+    if (m_updateInfo.hasUpdate) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                           "New version: %s", m_updateInfo.latestVersion.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Open")) {
+            ShellExecuteA(nullptr, "open", m_updateInfo.downloadUrl.c_str(),
+                         nullptr, nullptr, SW_SHOWNORMAL);
+        }
     }
 
     ImGui::End();

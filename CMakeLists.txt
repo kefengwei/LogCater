@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LogCater VERSION 1.0.0 LANGUAGES CXX)
+project(LogCater VERSION 1.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,6 +52,14 @@ FetchContent_Declare(nlohmann_json
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+# QR Code generator (nayuki)
+FetchContent_Declare(qrcodegen
+    GIT_REPOSITORY https://github.com/nayuki/QR-Code-generator.git
+    GIT_TAG v1.2.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(qrcodegen)
+
 # --- ImGui library ---
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -71,6 +79,13 @@ target_link_libraries(imgui PUBLIC glfw)
 # --- LogCater application ---
 file(GLOB_RECURSE SOURCES src/*.cpp src/*.h)
 
+# Nayuki QR code generator source files
+list(APPEND SOURCES
+    ${qrcodegen_SOURCE_DIR}/cpp/QrCode.cpp
+    ${qrcodegen_SOURCE_DIR}/cpp/QrSegment.cpp
+    ${qrcodegen_SOURCE_DIR}/cpp/BitBuffer.cpp
+)
+
 # Configure Windows resource files with version info
 configure_file(src/resource.h ${CMAKE_CURRENT_BINARY_DIR}/resource.h COPYONLY)
 configure_file(src/resource.rc.in ${CMAKE_CURRENT_BINARY_DIR}/resource.rc @ONLY)
@@ -80,6 +95,7 @@ add_executable(logcater WIN32 ${SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/resource.rc
 
 target_include_directories(logcater PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${qrcodegen_SOURCE_DIR}/cpp
 )
 
 target_link_libraries(logcater PRIVATE

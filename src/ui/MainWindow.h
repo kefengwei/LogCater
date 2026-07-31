@@ -6,6 +6,7 @@
 #include "ui/FileBrowserPanel.h"
 #include "ui/AppInfoPanel.h"
 #include "ui/HelpPanel.h"
+#include "ui/WiFiPairingPanel.h"
 #include <string>
 
 class Application;
@@ -23,6 +24,7 @@ private:
     FileBrowserPanel m_fileBrowserPanel;
     AppInfoPanel m_appInfoPanel;
     HelpPanel m_helpPanel;
+    WiFiPairingPanel m_wifiPanel;
     int m_activeTab = 0;
     bool m_firstFrame = true;
 

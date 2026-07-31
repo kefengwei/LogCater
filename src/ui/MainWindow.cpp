@@ -67,9 +67,16 @@ void MainWindow::render(Application& app) {
         ImGui::SameLine();
         m_deviceSelector.render(dm, 220.0f);
 
-        ImGui::SameLine(ImGui::GetWindowWidth() - 130);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 340);
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                            "LogCater v" STRINGIFY(LOGCATER_VERSION));
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("WiFi")) {
+            m_wifiPanel.open();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("WiFi ADB pairing (Android 11+ wireless debugging)");
 
         ImGui::SameLine();
         if (ImGui::SmallButton("Check for Updates")) {
@@ -175,6 +182,13 @@ void MainWindow::render(Application& app) {
     }
 
     ImGui::End();
+
+    // Render WiFi pairing popup (if open); triggers device refresh on success
+    m_wifiPanel.render(dm);
+    if (m_wifiPanel.justConnected()) {
+        m_wifiPanel.clearConnectedFlag();
+        dm.refreshAsync();
+    }
 
     // Save window position/size
     ImVec2 pos = ImGui::GetWindowPos();

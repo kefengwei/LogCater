@@ -45,6 +45,31 @@ void HelpPanel::render() {
         }
     }
 
+    // --- WiFi ADB 配对 / WiFi ADB Pairing ---
+    if (ImGui::CollapsingHeader(cn ? "WiFi 无线连接 (Android 11+)" : "WiFi ADB Pairing (Android 11+)")) {
+        if (cn) {
+            ImGui::TextWrapped("通过 WiFi 无线连接设备，无需 USB 数据线。需要 Android 11 及以上版本。");
+            ImGui::BulletText("点击菜单栏的 \"WiFi\" 按钮打开配对窗口。");
+            ImGui::BulletText("方式一（推荐）：在 Android 设备上：设置 > 开发者选项 > 无线调试 > 使用二维码配对设备。");
+            ImGui::BulletText("用设备扫描 LogCater 显示的二维码，LogCater 自动完成配对和连接。");
+            ImGui::BulletText("方式二（兼容性更好）：在设备上选择 \"使用配对码配对设备\"，将显示的 IP 地址:端口 和 6 位配对码输入 LogCater 的 \"Pair Code\" 页签，点击 \"Start Pairing\"。");
+            ImGui::BulletText("配对码模式下连接端口可留空自动发现，或在设备无线调试主界面查看后手动填写。");
+            ImGui::BulletText("设备连接成功后将在下拉列表中显示，之后无需 USB 即可使用 logcat、文件浏览等功能。");
+            ImGui::BulletText("确保设备和电脑连接到同一个 WiFi 网络。");
+            ImGui::BulletText("提示：某些公共/访客网络会隔离设备通信（AP Isolation），如配对失败请尝试使用手机热点。");
+        } else {
+            ImGui::TextWrapped("Connect your device wirelessly — no USB cable needed. Requires Android 11+.");
+            ImGui::BulletText("Click the \"WiFi\" button in the menu bar to open the pairing window.");
+            ImGui::BulletText("Method 1 (recommended): On your Android device: Settings > Developer options > Wireless debugging > Pair device with QR code.");
+            ImGui::BulletText("Scan the QR code shown in LogCater — it auto-discovers, pairs, and connects.");
+            ImGui::BulletText("Method 2 (more compatible): choose \"Pair device with pairing code\" on the device, then enter the IP:port and 6-digit code into the \"Pair Code\" tab in LogCater and click \"Start Pairing\".");
+            ImGui::BulletText("In pair-code mode the connect port can be left empty (auto-detected), or filled in from the Wireless debugging main screen.");
+            ImGui::BulletText("Once connected the device appears in the dropdown — logcat, file browser, etc. work without USB.");
+            ImGui::BulletText("Make sure your device and PC are on the same WiFi network.");
+            ImGui::BulletText("Tip: Public/guest networks may have AP Isolation that blocks mDNS. Try a phone hotspot if pairing fails.");
+        }
+    }
+
     // --- Logcat 标签页 ---
     if (ImGui::CollapsingHeader(cn ? "Logcat 标签页" : "Logcat Tab")) {
         if (cn) {

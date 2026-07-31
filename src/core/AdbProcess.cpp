@@ -48,6 +48,11 @@ AdbProcess::~AdbProcess() {
 }
 
 bool AdbProcess::start(const std::vector<std::string>& args, LineCallback onLine) {
+    return startWithInput(args, std::move(onLine), "");
+}
+
+bool AdbProcess::startWithInput(const std::vector<std::string>& args, LineCallback onLine,
+                                 const std::string& stdinData) {
     if (m_running.load()) return false;
 
     m_callback = std::move(onLine);
@@ -56,7 +61,6 @@ bool AdbProcess::start(const std::vector<std::string>& args, LineCallback onLine
     std::string cmdLine = findAdbPath();
     for (const auto& arg : args) {
         cmdLine += " ";
-        // Quote args that contain spaces
         if (arg.find(' ') != std::string::npos) {
             cmdLine += "\"" + arg + "\"";
         } else {
@@ -64,53 +68,75 @@ bool AdbProcess::start(const std::vector<std::string>& args, LineCallback onLine
         }
     }
 
-    // Create pipe for stdout
     SECURITY_ATTRIBUTES saAttr = {};
     saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
     saAttr.bInheritHandle = TRUE;
     saAttr.lpSecurityDescriptor = nullptr;
 
+    // Create pipe for stdout
     if (!CreatePipe(&m_hStdoutRead, &m_hStdoutWrite, &saAttr, 0)) {
         return false;
     }
-    // Ensure read handle is not inherited
     SetHandleInformation(m_hStdoutRead, HANDLE_FLAG_INHERIT, 0);
 
-    // Set up startup info
+    // Create pipe for stdin (if input data provided)
+    bool hasInput = !stdinData.empty();
+    if (hasInput) {
+        if (!CreatePipe(&m_hStdinRead, &m_hStdinWrite, &saAttr, 0)) {
+            CloseHandle(m_hStdoutRead);
+            CloseHandle(m_hStdoutWrite);
+            m_hStdoutRead = nullptr;
+            m_hStdoutWrite = nullptr;
+            return false;
+        }
+        SetHandleInformation(m_hStdinWrite, HANDLE_FLAG_INHERIT, 0);
+    }
+
     STARTUPINFOA si = {};
     si.cb = sizeof(STARTUPINFOA);
     si.hStdOutput = m_hStdoutWrite;
     si.hStdError = m_hStdoutWrite;
+    si.hStdInput = hasInput ? m_hStdinRead : GetStdHandle(STD_INPUT_HANDLE);
     si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
 
     PROCESS_INFORMATION pi = {};
 
-    // CreateProcess needs a mutable buffer for cmdLine
     std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
     cmdBuf.push_back('\0');
 
     if (!CreateProcessA(
-            nullptr,           // application name
-            cmdBuf.data(),     // command line
-            nullptr,           // process attributes
-            nullptr,           // thread attributes
-            TRUE,              // inherit handles (for stdout pipe)
-            CREATE_NO_WINDOW,  // no console window
-            nullptr,           // environment
-            nullptr,           // current directory
-            &si,
-            &pi)) {
+            nullptr, cmdBuf.data(), nullptr, nullptr,
+            TRUE,              // inherit handles
+            CREATE_NO_WINDOW,
+            nullptr, nullptr, &si, &pi)) {
         CloseHandle(m_hStdoutRead);
         CloseHandle(m_hStdoutWrite);
         m_hStdoutRead = nullptr;
         m_hStdoutWrite = nullptr;
+        if (hasInput) {
+            CloseHandle(m_hStdinRead);
+            CloseHandle(m_hStdinWrite);
+            m_hStdinRead = nullptr;
+            m_hStdinWrite = nullptr;
+        }
         return false;
     }
 
-    // Close the write end in our process so ReadFile gets EOF when child exits
     CloseHandle(m_hStdoutWrite);
     m_hStdoutWrite = nullptr;
+
+    // Write stdin data and close the write end (signals EOF to child)
+    if (hasInput) {
+        CloseHandle(m_hStdinRead);
+        m_hStdinRead = nullptr;
+
+        DWORD written = 0;
+        WriteFile(m_hStdinWrite, stdinData.data(),
+                  static_cast<DWORD>(stdinData.size()), &written, nullptr);
+        CloseHandle(m_hStdinWrite);
+        m_hStdinWrite = nullptr;
+    }
 
     m_hProcess = pi.hProcess;
     CloseHandle(pi.hThread);
@@ -132,7 +158,7 @@ void AdbProcess::stop() {
         m_hProcess = nullptr;
     }
 
-    // Close pipe to unblock reader
+    // Close pipe handles
     if (m_hStdoutRead) {
         CloseHandle(m_hStdoutRead);
         m_hStdoutRead = nullptr;
@@ -140,6 +166,14 @@ void AdbProcess::stop() {
     if (m_hStdoutWrite) {
         CloseHandle(m_hStdoutWrite);
         m_hStdoutWrite = nullptr;
+    }
+    if (m_hStdinRead) {
+        CloseHandle(m_hStdinRead);
+        m_hStdinRead = nullptr;
+    }
+    if (m_hStdinWrite) {
+        CloseHandle(m_hStdinWrite);
+        m_hStdinWrite = nullptr;
     }
 
     if (m_readerThread.joinable()) {

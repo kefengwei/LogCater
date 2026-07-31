@@ -51,6 +51,20 @@ private:
     void viewFile(const std::string& deviceSerial, const std::string& path, const std::string& name);
     void pullFile(const std::string& deviceSerial, const std::string& path, const std::string& name);
     void uploadFile(const std::string& deviceSerial, const std::string& localPath);
+    void deleteEntry(const std::string& deviceSerial, const std::string& path, const std::string& name, bool isDir);
+    void createDirectory(const std::string& deviceSerial, const std::string& path, const std::string& name);
     static bool runLs(const std::string& deviceSerial, const std::string& path,
                       std::vector<FileEntry>& out, std::string& error);
+
+    // Delete confirmation popup
+    bool m_showDeleteConfirm = false;
+    std::string m_delDeviceSerial;
+    std::string m_delPath;
+    std::string m_delName;
+    bool m_delIsDir = false;
+
+    // New directory popup
+    bool m_showNewFolder = false;
+    char m_newFolderName[128] = {};
+    std::string m_newFolderDeviceSerial;
 };

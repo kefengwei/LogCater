@@ -272,6 +272,63 @@ void FileBrowserPanel::uploadFile(const std::string& deviceSerial, const std::st
     }).detach();
 }
 
+void FileBrowserPanel::deleteEntry(const std::string& deviceSerial,
+                                     const std::string& path, const std::string& name,
+                                     bool isDir) {
+    std::string fullPath = path;
+    if (fullPath.back() != '/') fullPath += '/';
+    fullPath += name;
+
+    // Escape for shell: wrap in single quotes, escape internal single quotes
+    auto shellEscape = [](const std::string& s) -> std::string {
+        std::string escaped = "'";
+        for (char c : s) {
+            if (c == '\'') escaped += "'\\''";
+            else escaped += c;
+        }
+        escaped += "'";
+        return escaped;
+    };
+    std::string safePath = shellEscape(fullPath);
+
+    std::thread([this, deviceSerial, safePath]() {
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, "shell", std::string("rm -rf ") + safePath},
+            [](const std::string&) {});
+        proc.waitForExit(5000);
+        proc.stop();
+        refreshListing(deviceSerial);
+    }).detach();
+}
+
+void FileBrowserPanel::createDirectory(const std::string& deviceSerial,
+                                        const std::string& path, const std::string& name) {
+    std::string fullPath = path;
+    if (fullPath.back() != '/') fullPath += '/';
+    fullPath += name;
+
+    // Escape for shell: wrap in single quotes, escape internal single quotes
+    auto shellEscape = [](const std::string& s) -> std::string {
+        std::string escaped = "'";
+        for (char c : s) {
+            if (c == '\'') escaped += "'\\''";
+            else escaped += c;
+        }
+        escaped += "'";
+        return escaped;
+    };
+    std::string safePath = shellEscape(fullPath);
+
+    std::thread([this, deviceSerial, safePath]() {
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, "shell", std::string("mkdir -p ") + safePath},
+            [](const std::string&) {});
+        proc.waitForExit(5000);
+        proc.stop();
+        refreshListing(deviceSerial);
+    }).detach();
+}
+
 void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm, Settings& settings) {
     // --- Process dropped files ---
     {
@@ -354,6 +411,13 @@ void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm
     ImGui::SameLine();
     if (ImGui::SmallButton("Refresh")) {
         refreshListing(deviceSerial);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::SmallButton("New Folder")) {
+        m_newFolderName[0] = '\0';
+        m_newFolderDeviceSerial = deviceSerial;
+        m_showNewFolder = true;
     }
 
     // --- Quick nav buttons ---
@@ -512,6 +576,14 @@ void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm
                     pullFile(deviceSerial, m_currentPath, entry.name);
                 }
             }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Del")) {
+                m_delDeviceSerial = deviceSerial;
+                m_delPath = m_currentPath;
+                m_delName = entry.name;
+                m_delIsDir = entry.isDir;
+                m_showDeleteConfirm = true;
+            }
 
             ImGui::PopID();
         }
@@ -562,6 +634,63 @@ void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm
             ImGui::CloseCurrentPopup();
         }
 
+        ImGui::EndPopup();
+    }
+
+    // --- Delete confirmation popup ---
+    if (m_showDeleteConfirm) {
+        ImGui::OpenPopup("Confirm Delete");
+        m_showDeleteConfirm = false;
+    }
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(400, 160), ImGuiCond_Appearing);
+
+    if (ImGui::BeginPopupModal("Confirm Delete", nullptr)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "%s",
+                           m_delIsDir ? "Delete directory and all contents?" : "Delete file?");
+        ImGui::TextWrapped("%s%s", m_delPath.c_str(), m_delName.c_str());
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (ImGui::Button("Delete", ImVec2(100, 0))) {
+            deleteEntry(m_delDeviceSerial, m_delPath, m_delName, m_delIsDir);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // --- New Folder popup ---
+    if (m_showNewFolder) {
+        ImGui::OpenPopup("New Folder");
+        m_showNewFolder = false;
+    }
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(380, 120), ImGuiCond_Appearing);
+
+    if (ImGui::BeginPopupModal("New Folder", nullptr)) {
+        ImGui::TextUnformatted("Create folder in:");
+        ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "%s", m_currentPath.c_str());
+        ImGui::Spacing();
+
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##newFolderName", "folder name", m_newFolderName, sizeof(m_newFolderName));
+        ImGui::Spacing();
+
+        if (ImGui::Button("Create", ImVec2(100, 0)) && m_newFolderName[0] != '\0') {
+            createDirectory(m_newFolderDeviceSerial, m_currentPath, m_newFolderName);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
 }

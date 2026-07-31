@@ -19,6 +19,11 @@ public:
     /// Start an adb command. Returns true if process spawned successfully.
     bool start(const std::vector<std::string>& args, LineCallback onLine);
 
+    /// Start an adb command and write input to its stdin, then close stdin.
+    /// Used for interactive commands like 'adb pair' that read from stdin.
+    bool startWithInput(const std::vector<std::string>& args, LineCallback onLine,
+                        const std::string& stdinData);
+
     /// Kill process and join reader thread.
     void stop();
 
@@ -31,6 +36,8 @@ private:
     HANDLE m_hProcess = nullptr;
     HANDLE m_hStdoutRead = nullptr;
     HANDLE m_hStdoutWrite = nullptr;
+    HANDLE m_hStdinRead = nullptr;
+    HANDLE m_hStdinWrite = nullptr;
     std::thread m_readerThread;
     std::atomic<bool> m_running{false};
     LineCallback m_callback;

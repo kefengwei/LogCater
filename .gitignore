@@ -14,3 +14,4 @@ Thumbs.db
 CMakeUserPresets.json
 build_vs/
 scripts/icon_*.png
+reasonix.toml

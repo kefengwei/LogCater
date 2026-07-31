@@ -6,9 +6,7 @@
 #include "ui/FileBrowserPanel.h"
 #include "ui/AppInfoPanel.h"
 #include "ui/HelpPanel.h"
-#include "core/UpdateChecker.h"
 #include <string>
-#include <atomic>
 
 class Application;
 
@@ -28,9 +26,5 @@ private:
     int m_activeTab = 0;
     bool m_firstFrame = true;
 
-    // Update checker
-    UpdateChecker::UpdateInfo m_updateInfo;
-    std::atomic<bool> m_updateCheckDone{false};
-    void triggerUpdateCheck();
     void openReleasePage();
 };

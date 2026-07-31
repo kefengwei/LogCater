@@ -91,13 +91,12 @@ void HelpPanel::render() {
     // --- Update Checking ---
     if (ImGui::CollapsingHeader("Update Checking")) {
         ImGui::TextWrapped(
-            "LogCater automatically checks for new versions on startup via the GitHub Releases API. "
-            "No data is sent — it fetches the latest release tag and compares it with the current version."
+            "Click \"Check for Updates\" in the menu bar to open the GitHub Releases page "
+            "in your browser, where you can download the latest version."
         );
-        ImGui::BulletText("When a new version is available, a notification appears in the menu bar.");
-        ImGui::BulletText("Click \"Open Release Page\" to download the latest version from GitHub.");
-        ImGui::BulletText("Click the \"?\" button in the menu bar to manually check for updates.");
+        ImGui::BulletText("Download the latest LogCater.zip and extract it over your existing installation.");
         ImGui::BulletText("Replace logcater.exe and the adb/ folder with the new version to upgrade.");
+        ImGui::BulletText("Your settings (zoom level, window position, tag history) are preserved automatically.");
     }
 
     // --- Troubleshooting ---

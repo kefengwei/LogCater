@@ -2,7 +2,6 @@
 #include "Application.h"
 #include "adb/DeviceManager.h"
 #include "core/Settings.h"
-#include "core/UpdateChecker.h"
 #include "imgui.h"
 #include <Windows.h>
 #include <shellapi.h>
@@ -22,22 +21,10 @@ MainWindow::MainWindow() {
     });
 }
 
-void MainWindow::triggerUpdateCheck() {
-    if (m_updateCheckDone.load()) return;
-    m_updateCheckDone.store(true);
-
-    UpdateChecker::check(STRINGIFY(LOGCATER_VERSION),
-        [this](const UpdateChecker::UpdateInfo& info) {
-            m_updateInfo = info;
-        });
-}
-
 void MainWindow::openReleasePage() {
-    std::string url = m_updateInfo.downloadUrl;
-    if (url.empty()) {
-        url = "https://github.com/kefengwei/LogCater/releases";
-    }
-    ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOW);
+    ShellExecuteA(nullptr, "open",
+        "https://github.com/kefengwei/LogCater/releases",
+        nullptr, nullptr, SW_SHOW);
 }
 
 void MainWindow::render(Application& app) {
@@ -52,7 +39,6 @@ void MainWindow::render(Application& app) {
         if (settings.mainWindowWidth > 0 && settings.mainWindowHeight > 0) {
             ImGui::SetWindowSize(ImVec2(settings.mainWindowWidth, settings.mainWindowHeight));
         }
-        triggerUpdateCheck();
     }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -81,31 +67,16 @@ void MainWindow::render(Application& app) {
         ImGui::SameLine();
         m_deviceSelector.render(dm, 220.0f);
 
-        // Update notification
-        if (m_updateInfo.hasUpdate) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "|");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                               "New version: %s",
-                               m_updateInfo.latestVersion.c_str());
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Open Release Page")) {
-                openReleasePage();
-            }
-        }
-
         ImGui::SameLine(ImGui::GetWindowWidth() - 130);
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                            "LogCater v" STRINGIFY(LOGCATER_VERSION));
 
         ImGui::SameLine();
-        if (ImGui::SmallButton("?")) {
-            m_updateCheckDone.store(false);
-            triggerUpdateCheck();
+        if (ImGui::SmallButton("Check for Updates")) {
+            openReleasePage();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Check for updates");
+            ImGui::SetTooltip("Open GitHub Releases page");
 
         ImGui::EndMenuBar();
     }
@@ -201,18 +172,6 @@ void MainWindow::render(Application& app) {
         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Logcat: Running");
     } else {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Logcat: Stopped");
-    }
-
-    if (m_updateInfo.hasUpdate) {
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                           "New version: %s", m_updateInfo.latestVersion.c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Open Release Page")) {
-            openReleasePage();
-        }
     }
 
     ImGui::End();

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LogCater VERSION 1.2.5 LANGUAGES CXX)
+project(LogCater VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +16,11 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+
+# MSVC: treat source as UTF-8 (needed for Chinese text in HelpPanel)
+if(MSVC)
+    add_compile_options("/utf-8")
+endif()
 
 # --- Dependencies via FetchContent ---
 include(FetchContent)
@@ -67,6 +72,7 @@ target_link_libraries(imgui PUBLIC glfw)
 file(GLOB_RECURSE SOURCES src/*.cpp src/*.h)
 
 # Configure Windows resource files with version info
+configure_file(src/resource.h ${CMAKE_CURRENT_BINARY_DIR}/resource.h COPYONLY)
 configure_file(src/resource.rc.in ${CMAKE_CURRENT_BINARY_DIR}/resource.rc @ONLY)
 configure_file(src/logcater.ico ${CMAKE_CURRENT_BINARY_DIR}/logcater.ico COPYONLY)
 

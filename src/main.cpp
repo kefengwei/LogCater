@@ -2,6 +2,9 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
+#define NOMINMAX
+#include <Windows.h>
 #include <cstdio>
 #include <mutex>
 #include <vector>
@@ -91,6 +94,19 @@ int main(int, char**) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetDropCallback(window, glfw_drop_callback);
+
+    // Set window icon from embedded resource (GLFW defaults to IDI_APPLICATION)
+    {
+        HWND hwnd = glfwGetWin32Window(window);
+        HINSTANCE hInst = GetModuleHandle(nullptr);
+        // ICON_BIG = taskbar / alt-tab, ICON_SMALL = title bar
+        HICON hIconBig = (HICON)LoadImage(hInst, MAKEINTRESOURCE(1),
+            IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+        HICON hIconSmall = (HICON)LoadImage(hInst, MAKEINTRESOURCE(1),
+            IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+        if (hIconBig)  SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconBig);
+        if (hIconSmall) SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
+    }
 
     // --- Setup Dear ImGui ---
     IMGUI_CHECKVERSION();

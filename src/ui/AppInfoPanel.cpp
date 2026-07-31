@@ -50,15 +50,15 @@ void AppInfoPanel::refreshAppList(const std::string& deviceSerial) {
         m_totalCount.store(static_cast<int>(targetPkgs.size()));
 
         // --- Step 2: Get all package details in ONE dumpsys call (~5-10s) ---
-        // grep -e filters on device: keeps only Package[...], versionCode=, versionName= lines
-        // This is MUCH faster than calling dumpsys for each package individually.
+        // Captures Package[...], versionCode=, versionName=, and label= lines.
+        // ' label=' (space-prefixed) avoids matching labelRes=/nonLocalizedLabel=.
         std::vector<AppInfo> newApps;
         AppInfo current;
         std::string accumulated;
         {
             AdbProcess proc;
             proc.start({"-s", deviceSerial, "shell",
-                        "dumpsys package | grep -e 'Package \\[' -e 'versionCode=' -e 'versionName='"},
+                        "dumpsys package | grep -e 'Package \\[' -e 'versionCode=' -e 'versionName=' -e ' label='"},
                 [&](const std::string& line) {
                     accumulated += line + "\n";
                 });
@@ -74,6 +74,7 @@ void AppInfoPanel::refreshAppList(const std::string& deviceSerial) {
             std::regex vcRe(R"(versionCode=(\d+))");
             std::regex vnRe(R"(versionName=(\S+))");
             std::regex tsRe(R"(targetSdk=(\d+))");
+            std::regex labelRe(R"(\s+label=(\S.*))");   // ' label=App Name'
             std::smatch m;
 
             while (std::getline(iss, line)) {
@@ -83,13 +84,11 @@ void AppInfoPanel::refreshAppList(const std::string& deviceSerial) {
                 if (std::regex_search(line, m, pkgRe)) {
                     // Save previous entry
                     if (!current.packageName.empty() && !targetPkgs.empty()) {
-                        // Only keep if in target list (for 3rd-party/system filter)
                         if (targetPkgs.count(current.packageName)) {
                             current.detailsLoaded = true;
                             newApps.push_back(std::move(current));
                         }
                     } else if (!current.packageName.empty() && targetPkgs.empty()) {
-                        // "all" mode with no pre-filter
                         current.detailsLoaded = true;
                         newApps.push_back(std::move(current));
                     }
@@ -102,6 +101,14 @@ void AppInfoPanel::refreshAppList(const std::string& deviceSerial) {
                     }
                 } else if (std::regex_search(line, m, vnRe)) {
                     current.versionName = m[1].str();
+                } else if (std::regex_search(line, m, labelRe)) {
+                    std::string lbl = m[1].str();
+                    // Trim trailing whitespace
+                    while (!lbl.empty() && std::isspace(static_cast<unsigned char>(lbl.back())))
+                        lbl.pop_back();
+                    if (current.appName.empty() && !lbl.empty()) {
+                        current.appName = lbl;
+                    }
                 }
             }
             // Last entry
@@ -196,7 +203,8 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
         std::lock_guard<std::mutex> lock(m_mutex);
         for (const auto& app : m_apps) {
             if (m_textFilter.empty() ||
-                app.packageName.find(m_textFilter) != std::string::npos) {
+                app.packageName.find(m_textFilter) != std::string::npos ||
+                app.appName.find(m_textFilter) != std::string::npos) {
                 totalVisible++;
             }
         }
@@ -228,10 +236,11 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
     ImGui::BeginChild("AppTable", ImVec2(0, 0), false,
                       ImGuiWindowFlags_HorizontalScrollbar);
 
-    if (ImGui::BeginTable("##appTable", 4,
+    if (ImGui::BeginTable("##appTable", 5,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                           ImGuiTableFlags_Sortable)) {
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableSetupColumn("Package", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 120.0f);
         ImGui::TableSetupColumn("Ver.Code", ImGuiTableColumnFlags_WidthFixed, 80.0f);
@@ -240,9 +249,10 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
 
         int rowIdx = 0;
         for (const auto& app : snapshot) {
-            // Text filter
+            // Text filter (matches package name or app name)
             if (!m_textFilter.empty() &&
-                app.packageName.find(m_textFilter) == std::string::npos) {
+                app.packageName.find(m_textFilter) == std::string::npos &&
+                app.appName.find(m_textFilter) == std::string::npos) {
                 continue;
             }
 
@@ -250,6 +260,16 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
+            // App name (human-readable label)
+            if (app.detailsLoaded && !app.appName.empty()) {
+                ImGui::TextUnformatted(app.appName.c_str());
+            } else if (app.detailsLoaded) {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(no label)");
+            } else {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "...");
+            }
+
+            ImGui::TableNextColumn();
             // Selectable full-row: click to copy package name
             if (ImGui::Selectable(app.packageName.c_str(), false,
                                   ImGuiSelectableFlags_SpanAllColumns)) {

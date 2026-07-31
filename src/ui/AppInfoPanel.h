@@ -10,6 +10,7 @@ class Settings;
 
 struct AppInfo {
     std::string packageName;
+    std::string appName;        // human-readable label from dumpsys
     std::string versionName;
     int versionCode = 0;
     int targetSdk = 0;

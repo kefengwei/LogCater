@@ -23,14 +23,29 @@ void FilterBar::render(Settings& settings) {
     // --- Tag filter + clear button ---
     ImGui::TextUnformatted("Tag:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(130);
+    ImGui::SetNextItemWidth(160);
     if (m_tagBuf[0] == '\0' && !m_tagFilter.empty()) {
         std::strncpy(m_tagBuf, m_tagFilter.c_str(), sizeof(m_tagBuf) - 1);
     }
-    if (ImGui::InputTextWithHint("##tagFilter", "tag...", m_tagBuf, sizeof(m_tagBuf))) {
+    if (ImGui::InputTextWithHint("##tagFilter", "tag1;tag2...", m_tagBuf, sizeof(m_tagBuf))) {
         m_tagFilter = m_tagBuf;
+        // Add each individual tag to history (split by ';')
         if (!m_tagFilter.empty()) {
-            settings.addTagToHistory(m_tagFilter);
+            auto addSingle = [&](const std::string& segment) {
+                std::string trimmed;
+                for (char c : segment) {
+                    if (c != ' ' && c != '\t') trimmed += c;
+                }
+                if (!trimmed.empty()) settings.addTagToHistory(trimmed);
+            };
+            std::string filter = m_tagFilter;
+            size_t pos = 0;
+            while (pos <= filter.size()) {
+                size_t end = filter.find(';', pos);
+                if (end == std::string::npos) end = filter.size();
+                addSingle(filter.substr(pos, end - pos));
+                pos = end + 1;
+            }
         }
     }
 

@@ -151,8 +151,20 @@ void MainWindow::render(Application& app) {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Help")) {
+        if (ImGui::BeginTabItem("Device")) {
             m_activeTab = 4;
+            auto selected = dm.selectedDevice();
+            if (!selected.has_value()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+                                   "Please select a device to view info.");
+            } else {
+                m_deviceInfoPanel.render(selected->serial);
+            }
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Help")) {
+            m_activeTab = 5;
             m_helpPanel.render();
             ImGui::EndTabItem();
         }

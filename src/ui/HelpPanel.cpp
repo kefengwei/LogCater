@@ -154,6 +154,25 @@ void HelpPanel::render() {
         }
     }
 
+    // --- Device 标签页 ---
+    if (ImGui::CollapsingHeader(cn ? "Device 标签页" : "Device Tab")) {
+        if (cn) {
+            ImGui::TextWrapped("设备信息仪表板，一键查看关键系统状态。");
+            ImGui::BulletText("系统信息 — 制造商、型号、Android 版本、SDK Level、运行时间。");
+            ImGui::BulletText("电池 — 电量百分比、温度、健康状态、充电状态。");
+            ImGui::BulletText("存储 (/data) — 总容量、已用、可用，进度条显示。");
+            ImGui::BulletText("内存 — 总内存、可用内存、使用率进度条。");
+            ImGui::BulletText("每 10 秒自动刷新，也可手动点击 Refresh。");
+        } else {
+            ImGui::TextWrapped("Device information dashboard — key system status at a glance.");
+            ImGui::BulletText("System Info — manufacturer, model, Android version, SDK level, uptime.");
+            ImGui::BulletText("Battery — level percentage, temperature, health, charging status.");
+            ImGui::BulletText("Storage (/data) — total, used, free with progress bar.");
+            ImGui::BulletText("Memory — total, available with usage progress bar.");
+            ImGui::BulletText("Auto-refreshes every 10 seconds, or click Refresh manually.");
+        }
+    }
+
     // --- 快捷键 ---
     if (ImGui::CollapsingHeader(cn ? "快捷键" : "Keyboard Shortcuts")) {
         if (ImGui::BeginTable("ShortcutsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {

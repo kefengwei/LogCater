@@ -5,6 +5,7 @@
 #include "ui/DropboxPanel.h"
 #include "ui/FileBrowserPanel.h"
 #include "ui/AppInfoPanel.h"
+#include "ui/DeviceInfoPanel.h"
 #include "ui/HelpPanel.h"
 #include "ui/WiFiPairingPanel.h"
 #include <string>
@@ -23,6 +24,7 @@ private:
     DropboxPanel m_dropboxPanel;
     FileBrowserPanel m_fileBrowserPanel;
     AppInfoPanel m_appInfoPanel;
+    DeviceInfoPanel m_deviceInfoPanel;
     HelpPanel m_helpPanel;
     WiFiPairingPanel m_wifiPanel;
     int m_activeTab = 0;

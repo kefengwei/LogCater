@@ -49,7 +49,31 @@ bool LogBuffer::matches(const LogEntry& entry,
                          const std::string& textFilter,
                          const std::string& tagFilter,
                          uint8_t levelMask) {
-    if (!tagFilter.empty() && entry.tag != tagFilter) return false;
+    // Multi-tag filter: split by ';', match if entry tag matches ANY (OR logic).
+    // Whitespace around tags is trimmed; empty segments are ignored.
+    if (!tagFilter.empty()) {
+        auto trim = [](const std::string& s) -> std::string {
+            size_t b = 0;
+            while (b < s.size() && (s[b] == ' ' || s[b] == '\t')) b++;
+            size_t e = s.size();
+            while (e > b && (s[e-1] == ' ' || s[e-1] == '\t')) e--;
+            return s.substr(b, e - b);
+        };
+
+        bool matched = false;
+        size_t start = 0;
+        while (start <= tagFilter.size()) {
+            size_t end = tagFilter.find(';', start);
+            if (end == std::string::npos) end = tagFilter.size();
+            std::string segment = trim(tagFilter.substr(start, end - start));
+            if (!segment.empty() && entry.tag == segment) {
+                matched = true;
+                break;
+            }
+            start = end + 1;
+        }
+        if (!matched) return false;
+    }
     // Check level bitmask
     if (!(levelMask & (1 << levelToInt(entry.level)))) return false;
     if (!textFilter.empty()) {

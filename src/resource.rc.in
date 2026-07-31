@@ -35,6 +35,3 @@ END
 
 // === App icon ===
 IDI_ICON1               ICON    "logcater.ico"
-
-// === Manifest: mark as modern Windows app, request asInvoker (no admin needed) ===
-CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "logcater.manifest"

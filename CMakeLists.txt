@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LogCater VERSION 1.2.2 LANGUAGES CXX)
+project(LogCater VERSION 1.2.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,7 +68,6 @@ file(GLOB_RECURSE SOURCES src/*.cpp src/*.h)
 
 # Configure Windows resource files with version info
 configure_file(src/resource.rc.in ${CMAKE_CURRENT_BINARY_DIR}/resource.rc @ONLY)
-configure_file(src/logcater.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/logcater.manifest @ONLY)
 configure_file(src/logcater.ico ${CMAKE_CURRENT_BINARY_DIR}/logcater.ico COPYONLY)
 
 add_executable(logcater WIN32 ${SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/resource.rc)
@@ -89,9 +88,6 @@ target_link_libraries(logcater PRIVATE
 target_compile_definitions(logcater PRIVATE
     LOGCATER_VERSION="${PROJECT_VERSION}"
 )
-
-# Disable linker-generated manifest — we provide our own via resource.rc
-target_link_options(logcater PRIVATE "/MANIFEST:NO")
 
 # Find adb.exe at configure time
 find_program(ADB_EXECUTABLE adb)

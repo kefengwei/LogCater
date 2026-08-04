@@ -122,14 +122,16 @@ if(ADB_EXECUTABLE)
 endif()
 
 # --- Packaging (Windows installer via CPack + NSIS) ---
-install(TARGETS logcater RUNTIME DESTINATION .)
+# CPack's NSIS template creates shortcuts pointing at $INSTDIR\bin\<exe>,
+# so install the executable (and its adb) under bin/.
+install(TARGETS logcater RUNTIME DESTINATION bin)
 if(ADB_EXECUTABLE)
     get_filename_component(ADB_DIR "${ADB_EXECUTABLE}" DIRECTORY)
     install(FILES
         "${ADB_DIR}/adb.exe"
         "${ADB_DIR}/AdbWinApi.dll"
         "${ADB_DIR}/AdbWinUsbApi.dll"
-        DESTINATION adb)
+        DESTINATION bin/adb)
 endif()
 
 set(CPACK_GENERATOR "NSIS")

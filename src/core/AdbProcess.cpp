@@ -8,8 +8,13 @@ std::string AdbProcess::findAdbPath() {
     if (!g_adbPath.empty()) return g_adbPath;
 
 #ifdef ADB_PATH
-    g_adbPath = ADB_PATH;
-    return g_adbPath;
+    // Configure-time path (e.g. the developer's Android SDK). Only use it when it
+    // still exists, otherwise fall through to the adb bundled next to the exe so
+    // installed copies work on machines without the SDK.
+    if (GetFileAttributesA(ADB_PATH) != INVALID_FILE_ATTRIBUTES) {
+        g_adbPath = ADB_PATH;
+        return g_adbPath;
+    }
 #endif
 
     // Check Android SDK default location

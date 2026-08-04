@@ -14,27 +14,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --config Release
-
       - name: Download Android platform-tools
         run: |
           curl -L -o platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-windows.zip
           7z x platform-tools.zip -oplatform-tools
-          mkdir build\Release\adb
-          copy platform-tools\platform-tools\adb.exe build\Release\adb\
-          copy platform-tools\platform-tools\AdbWinApi.dll build\Release\adb\
-          copy platform-tools\platform-tools\AdbWinUsbApi.dll build\Release\adb\
         shell: cmd
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release "-DADB_EXECUTABLE=${{ github.workspace }}\platform-tools\platform-tools\adb.exe"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Package installer (NSIS)
+        run: cpack -B build -C Release -G NSIS
 
       - name: Stage release package
         run: |
           mkdir stage
           copy build\Release\logcater.exe stage\
           xcopy /E /I build\Release\adb stage\adb
+          copy build\LogCater-*.exe stage\
         shell: cmd
 
       - name: Upload artifact
@@ -60,10 +63,15 @@ jobs:
       - name: Package zip
         run: |
           cd logcater
-          zip -r ../LogCater.zip .
+          mkdir -p portable
+          cp logcater.exe portable/
+          cp -r adb portable/
+          (cd portable && zip -r ../LogCater.zip .)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: LogCater.zip
+          files: |
+            LogCater.zip
+            logcater/LogCater-*.exe
           generate_release_notes: true

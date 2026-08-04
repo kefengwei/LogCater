@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LogCater VERSION 1.0.2 LANGUAGES CXX)
+project(LogCater VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +34,7 @@ FetchContent_Declare(glfw
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(glfw)
 
 # Dear ImGui
@@ -119,3 +120,33 @@ if(ADB_EXECUTABLE)
         ADB_PATH="${ADB_EXECUTABLE}"
     )
 endif()
+
+# --- Packaging (Windows installer via CPack + NSIS) ---
+install(TARGETS logcater RUNTIME DESTINATION .)
+if(ADB_EXECUTABLE)
+    get_filename_component(ADB_DIR "${ADB_EXECUTABLE}" DIRECTORY)
+    install(FILES
+        "${ADB_DIR}/adb.exe"
+        "${ADB_DIR}/AdbWinApi.dll"
+        "${ADB_DIR}/AdbWinUsbApi.dll"
+        DESTINATION adb)
+endif()
+
+set(CPACK_GENERATOR "NSIS")
+set(CPACK_PACKAGE_NAME "LogCater")
+set(CPACK_PACKAGE_VENDOR "kefengwei")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Android logcat viewer and device manager")
+set(CPACK_PACKAGE_FILE_NAME "LogCater-${PROJECT_VERSION}-win64")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "LogCater")
+set(CPACK_PACKAGE_EXECUTABLES "logcater" "LogCater")
+set(CPACK_CREATE_DESKTOP_LINKS "logcater")
+set(CPACK_NSIS_DISPLAY_NAME "LogCater")
+set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/logcater.ico")
+set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/src/logcater.ico")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+set(CPACK_NSIS_MODIFY_PATH OFF)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+               ${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt COPYONLY)
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt")
+include(CPack)

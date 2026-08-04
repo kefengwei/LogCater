@@ -30,7 +30,8 @@ jobs:
         run: choco install nsis -y --no-progress
 
       - name: Package installer (NSIS)
-        run: cpack -B build -C Release -G NSIS
+        working-directory: build
+        run: cpack -C Release -G NSIS
 
       - name: Stage release package
         run: |
@@ -63,10 +64,7 @@ jobs:
       - name: Package zip
         run: |
           cd logcater
-          mkdir -p portable
-          cp logcater.exe portable/
-          cp -r adb portable/
-          (cd portable && zip -r ../LogCater.zip .)
+          zip -r ../LogCater.zip logcater.exe adb
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

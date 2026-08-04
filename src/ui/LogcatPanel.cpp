@@ -12,9 +12,9 @@ void LogcatPanel::start(const std::string& deviceSerial) {
     stop();
     m_pausedDeviceSerial = deviceSerial;
     m_displayEntries.clear();
-    m_lastBufferTotal = 0; m_lastRefreshTime = -1.0;
+    m_lastPushed = 0; m_lastRefreshTime = -1.0;
     m_selectedIndex = -1;
-    m_autoScroll = true; m_pendingNew = 0; m_paused = false;
+    m_autoScroll = true; m_userScrolledSinceDisable = false; m_pendingNew = 0; m_paused = false;
     m_reader.start(deviceSerial, m_logBuffer);
 }
 void LogcatPanel::stop() { m_reader.stop(); m_paused = false; }
@@ -23,7 +23,8 @@ void LogcatPanel::pause() { if (!m_reader.isRunning()) return; m_reader.stop(); 
 void LogcatPanel::resume() { if (!m_paused) return; m_paused = false; m_reader.start(m_pausedDeviceSerial, m_logBuffer); }
 void LogcatPanel::clearLogs() {
     m_logBuffer.clear(); m_displayEntries.clear();
-    m_lastBufferTotal = 0; m_lastRefreshTime = -1.0; m_selectedIndex = -1; m_pendingNew = 0;
+    m_lastPushed = 0; m_lastRefreshTime = -1.0; m_selectedIndex = -1; m_pendingNew = 0;
+    m_userScrolledSinceDisable = false;
 }
 void LogcatPanel::onDeviceDisconnected() { stop(); clearLogs(); }
 bool LogcatPanel::filtersChanged() const {
@@ -31,7 +32,7 @@ bool LogcatPanel::filtersChanged() const {
         || m_lastTagFilter != m_filterBar.tagFilter()
         || m_lastLevelMask != m_filterBar.levelMask();
 }
-bool LogcatPanel::dataChanged() const { return m_logBuffer.size() != m_lastBufferTotal; }
+bool LogcatPanel::dataChanged() const { return m_logBuffer.totalPushed() != m_lastPushed; }
 
 void LogcatPanel::refreshDisplay() {
     std::vector<LogEntry> newEntries;
@@ -54,9 +55,16 @@ void LogcatPanel::refreshDisplay() {
     m_lastTextFilter = m_filterBar.textFilter();
     m_lastTagFilter = m_filterBar.tagFilter();
     m_lastLevelMask = m_filterBar.levelMask();
-    m_lastBufferTotal = m_logBuffer.size();
+    m_lastPushed = m_logBuffer.totalPushed();
     m_lastRefreshTime = ImGui::GetTime();
     m_pendingNew = 0;
+}
+
+void LogcatPanel::enableAutoScroll() {
+    m_autoScroll = true;
+    m_selectedIndex = -1; // live view and a frozen selection are mutually exclusive
+    m_userScrolledSinceDisable = false;
+    refreshDisplay();
 }
 
 // ── helpers ──
@@ -81,6 +89,18 @@ static ImU32 levelBgColor(char lvl) {
         case 'F': return IM_COL32(150,15,150,255);
         default:  return IM_COL32(100,100,100,255);
     }
+}
+
+static bool IsMouseOverVerticalScrollbar() {
+    ImVec2 wPos = ImGui::GetWindowPos();
+    ImVec2 wSize = ImGui::GetWindowSize();
+    ImVec2 mouse = ImGui::GetIO().MousePos;
+    float sb = ImGui::GetStyle().ScrollbarSize;
+    float hSb = (ImGui::GetScrollMaxX() > 0.0f) ? sb : 0.0f; // horizontal bar sits at the bottom
+    return mouse.x >= wPos.x + wSize.x - sb - 4.0f
+        && mouse.x <= wPos.x + wSize.x
+        && mouse.y >= wPos.y + 2.0f
+        && mouse.y <= wPos.y + wSize.y - hSb - 2.0f;
 }
 
 static void RenderDetailPanel(const LogEntry& entry) {
@@ -116,14 +136,14 @@ void LogcatPanel::render(Settings& settings) {
 
     // Auto-scroll checkbox
     ImGui::SameLine();
-    ImGui::Checkbox("Auto-scroll", &m_autoScroll);
+    if (ImGui::Checkbox("Auto-scroll", &m_autoScroll)) {
+        if (m_autoScroll) enableAutoScroll();
+        else m_userScrolledSinceDisable = false;
+    }
 
     // Go Bottom
     ImGui::SameLine();
-    if (ImGui::SmallButton("Go Bottom")) {
-        m_autoScroll = true;
-        refreshDisplay();
-    }
+    if (ImGui::SmallButton("Go Bottom")) enableAutoScroll();
 
     // Pause / Resume / Clear
     ImGui::SameLine();
@@ -156,8 +176,8 @@ void LogcatPanel::render(Settings& settings) {
             refreshDisplay();
     }
     else if (!m_paused && dataChanged()) {
-        size_t nt = m_logBuffer.size();
-        if (nt > m_lastBufferTotal) { m_pendingNew += (nt - m_lastBufferTotal); m_lastBufferTotal = nt; }
+        size_t nt = m_logBuffer.totalPushed();
+        if (nt > m_lastPushed) { m_pendingNew += (nt - m_lastPushed); m_lastPushed = nt; }
     }
 
     float totalAvail = ImGui::GetContentRegionAvail().y;
@@ -169,6 +189,7 @@ void LogcatPanel::render(Settings& settings) {
                       false, ImGuiWindowFlags_HorizontalScrollbar);
 
     int totalRows = (int)m_displayEntries.size();
+    bool deselectThisFrame = false;
     ImGuiListClipper clipper;
     clipper.Begin(totalRows, ImGui::GetTextLineHeightWithSpacing());
 
@@ -187,8 +208,16 @@ void LogcatPanel::render(Settings& settings) {
 
             ImGui::PushID(i);
             ImGui::InvisibleButton("##row", ImVec2(rowW, rowH));
-            if (ImGui::IsItemClicked())
-                m_selectedIndex = (i == m_selectedIndex) ? -1 : i;
+            if (ImGui::IsItemClicked()) {
+                if (i == m_selectedIndex) {
+                    m_selectedIndex = -1; // deselect → unfreeze and show the latest
+                    deselectThisFrame = true;
+                } else {
+                    m_selectedIndex = i;  // select → freeze the view and stop auto-scroll
+                    m_autoScroll = false;
+                    m_userScrolledSinceDisable = false;
+                }
+            }
             ImGui::PopID();
 
             ImGui::SetCursorScreenPos(rowStart);
@@ -221,6 +250,42 @@ void LogcatPanel::render(Settings& settings) {
         }
     }
 
+    clipper.End();
+    if (deselectThisFrame) refreshDisplay();
+
+    // Remember that the user actively scrolled while auto-scroll is off,
+    // so reaching the bottom again can re-engage it (instead of a stale "at bottom" state).
+    if (!m_autoScroll && ImGui::IsWindowHovered()) {
+        bool wheelActive = ImGui::GetIO().MouseWheel != 0.0f;
+        bool scrollbarHeld = ImGui::IsMouseDown(ImGuiMouseButton_Left) && IsMouseOverVerticalScrollbar();
+        if (wheelActive || scrollbarHeld)
+            m_userScrolledSinceDisable = true;
+    }
+
+    // ── Resume auto-scroll: Enter, or scrollbar dragged to the bottom ──
+    bool justEnabled = false;
+    bool userWheelUp = ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel > 0.01f;
+    if (!m_autoScroll && totalRows > 0) {
+        float scrollMaxY = ImGui::GetScrollMaxY();
+        bool atBottom = scrollMaxY <= 0.0f || ImGui::GetScrollY() >= scrollMaxY - 2.0f;
+        bool enter = ImGui::IsWindowHovered()
+            && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
+        if ((atBottom && m_userScrolledSinceDisable && !userWheelUp) || enter) {
+            enableAutoScroll();
+            justEnabled = true;
+        }
+    }
+
+    // ── User scrolls away (wheel up / scrollbar grab) → stop auto-scroll ──
+    if (m_autoScroll && !justEnabled && ImGui::IsWindowHovered()) {
+        bool wheelUp = ImGui::GetIO().MouseWheel > 0.01f;
+        bool scrollbarGrabbed = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && IsMouseOverVerticalScrollbar();
+        if (wheelUp || scrollbarGrabbed) {
+            m_autoScroll = false;
+            m_userScrolledSinceDisable = false;
+        }
+    }
+
     // ── Scroll to bottom when auto-scrolling ──
     if (m_autoScroll && totalRows > 0) {
         float maxY = ImGui::GetScrollMaxY();
@@ -228,22 +293,6 @@ void LogcatPanel::render(Settings& settings) {
             ImGui::SetScrollY(maxY);
     }
 
-    // Detect user scrolling up via mouse wheel → turn off auto-scroll
-    if (m_autoScroll && ImGui::IsWindowHovered()) {
-        float wheel = ImGui::GetIO().MouseWheel;
-        if (wheel > 0.01f) { // scroll up
-            m_autoScroll = false;
-        }
-    }
-    // Detect user dragging scrollbar to bottom → turn on auto-scroll
-    if (!m_autoScroll && totalRows > 0) {
-        float scrollMaxY = ImGui::GetScrollMaxY();
-        if (scrollMaxY > 0.0f && ImGui::GetScrollY() >= scrollMaxY - 2.0f) {
-            m_autoScroll = true;
-        }
-    }
-
-    clipper.End();
     ImGui::EndChild();
 
     // ── Detail panel ──

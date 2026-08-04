@@ -48,6 +48,8 @@ public:
                     size_t start, size_t count) const;
 
     size_t size() const;
+    /// Monotonic total number of entries ever pushed (never shrinks, unlike size()).
+    size_t totalPushed() const;
     bool empty() const;
     bool overflowed() const { return m_overflowed; }
     size_t capacity() const { return m_ring.size(); }

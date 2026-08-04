@@ -37,6 +37,7 @@ private:
 
     // Scroll state
     bool m_autoScroll = true;
+    bool m_userScrolledSinceDisable = false;
 
     bool m_paused = false;
     std::string m_pausedDeviceSerial;
@@ -49,13 +50,14 @@ private:
     std::string m_lastTextFilter;
     std::string m_lastTagFilter;
     uint8_t m_lastLevelMask = 0x3F;
-    size_t m_lastBufferTotal = 0;
+    size_t m_lastPushed = 0;
     double m_lastRefreshTime = -1.0;
     static constexpr double MIN_REFRESH_INTERVAL = 0.15;
 
     bool filtersChanged() const;
     bool dataChanged() const;
     void refreshDisplay();
+    void enableAutoScroll();
 
 public:
     void render(Settings& settings);

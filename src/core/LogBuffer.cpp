@@ -28,6 +28,11 @@ size_t LogBuffer::size() const {
     return std::min(m_totalCount, m_ring.size());
 }
 
+size_t LogBuffer::totalPushed() const {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_totalCount;
+}
+
 bool LogBuffer::empty() const {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
     return m_totalCount == 0;

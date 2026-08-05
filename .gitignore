@@ -14,4 +14,8 @@ Thumbs.db
 CMakeUserPresets.json
 build_vs/
 scripts/icon_*.png
+
+# Python
+__pycache__/
+*.pyc
 reasonix.toml

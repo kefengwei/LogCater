@@ -63,15 +63,17 @@ void MainWindow::render(Application& app) {
 
     // --- Menu bar ---
     if (ImGui::BeginMenuBar()) {
-        ImGui::TextUnformatted("Device:");
+        ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f), "Device");
         ImGui::SameLine();
-        m_deviceSelector.render(dm, 220.0f);
+        ImGui::SetNextItemWidth(300.0f);
+        m_deviceSelector.render(dm, 300.0f);
 
-        ImGui::SameLine(ImGui::GetWindowWidth() - 340);
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
-                           "LogCater v" STRINGIFY(LOGCATER_VERSION));
-
+        ImGui::Separator();
         ImGui::SameLine();
+
+        ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f), "Quick Links");
+        ImGui::SameLine();
+
         if (ImGui::SmallButton("WiFi")) {
             m_wifiPanel.open();
         }
@@ -84,6 +86,10 @@ void MainWindow::render(Application& app) {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Open GitHub Releases page");
+
+        ImGui::SameLine(ImGui::GetWindowWidth() - 190);
+        ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f),
+                           "LogCater v" STRINGIFY(LOGCATER_VERSION));
 
         ImGui::EndMenuBar();
     }
@@ -176,21 +182,36 @@ void MainWindow::render(Application& app) {
     ImGui::Separator();
     auto selected = dm.selectedDevice();
     if (selected.has_value()) {
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Device: %s (%s)",
-                           selected->serial.c_str(),
-                           selected->model.empty() ? selected->state.c_str() : selected->model.c_str());
+        ImGui::TextColored(ImVec4(0.24f, 0.86f, 0.52f, 1.0f), "●");
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Device:");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.91f, 0.93f, 0.94f, 1.0f), "%s",
+                           selected->serial.c_str());
+        if (!selected->model.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.60f, 0.63f, 0.67f, 1.0f), "(%s)",
+                               selected->model.c_str());
+        }
+        if (!selected->state.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.45f, 0.70f, 0.85f, 1.0f), "[%s]",
+                               selected->state.c_str());
+        }
     } else {
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No device connected");
+        ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.38f, 1.0f), "●");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "No device connected");
     }
 
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "|");
+    ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f), "|");
     ImGui::SameLine();
 
     if (m_logcatPanel.isRunning()) {
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Logcat: Running");
+        ImGui::TextColored(ImVec4(0.24f, 0.86f, 0.52f, 1.0f), "● Logcat: Running");
     } else {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Logcat: Stopped");
+        ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f), "○ Logcat: Stopped");
     }
 
     ImGui::End();

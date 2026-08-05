@@ -42,6 +42,8 @@ private:
     bool m_paused = false;
     std::string m_pausedDeviceSerial;
     int m_selectedIndex = -1;
+    bool m_showDetail = false;
+    int m_contextIndex = -1;
 
     std::vector<LogEntry> m_displayEntries;
     static constexpr size_t MAX_DISPLAY = 10000;

@@ -42,6 +42,70 @@ static constexpr float BASE_FONT_SIZE = 18.0f;
 /// because NewFrame() caches font pointers from the atlas.
 static float g_pendingFontScale = -1.0f;
 
+/// Apply a professional dark theme (Android-green accent).
+static void applyDarkTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* c = style.Colors;
+
+    const ImVec4 bg         = ImVec4(0.105f, 0.115f, 0.130f, 1.00f); // window
+    const ImVec4 panel      = ImVec4(0.135f, 0.148f, 0.168f, 1.00f); // child/table bg
+    const ImVec4 panelAlt   = ImVec4(0.118f, 0.130f, 0.148f, 1.00f); // alt rows
+    const ImVec4 header     = ImVec4(0.165f, 0.185f, 0.215f, 1.00f);
+    const ImVec4 border     = ImVec4(0.235f, 0.265f, 0.305f, 1.00f);
+    const ImVec4 text       = ImVec4(0.910f, 0.925f, 0.940f, 1.00f);
+    const ImVec4 textDim    = ImVec4(0.570f, 0.600f, 0.635f, 1.00f);
+    const ImVec4 accent     = ImVec4(0.240f, 0.860f, 0.520f, 1.00f); // Android green
+    const ImVec4 accentDim  = ImVec4(0.180f, 0.620f, 0.390f, 1.00f);
+
+    c[ImGuiCol_Text]                 = text;
+    c[ImGuiCol_TextDisabled]         = textDim;
+    c[ImGuiCol_WindowBg]             = bg;
+    c[ImGuiCol_ChildBg]              = ImVec4(0.000f, 0.000f, 0.000f, 0.000f);
+    c[ImGuiCol_PopupBg]              = ImVec4(0.145f, 0.160f, 0.182f, 0.98f);
+    c[ImGuiCol_Border]               = border;
+    c[ImGuiCol_BorderShadow]         = ImVec4(0.000f, 0.000f, 0.000f, 0.000f);
+    c[ImGuiCol_FrameBg]              = ImVec4(0.160f, 0.180f, 0.205f, 1.00f);
+    c[ImGuiCol_FrameBgHovered]       = ImVec4(0.200f, 0.225f, 0.255f, 1.00f);
+    c[ImGuiCol_FrameBgActive]        = ImVec4(0.235f, 0.265f, 0.300f, 1.00f);
+    c[ImGuiCol_TitleBg]              = header;
+    c[ImGuiCol_TitleBgActive]        = header;
+    c[ImGuiCol_TitleBgCollapsed]     = header;
+    c[ImGuiCol_MenuBarBg]            = ImVec4(0.125f, 0.138f, 0.158f, 1.00f);
+    c[ImGuiCol_ScrollbarBg]          = ImVec4(0.120f, 0.132f, 0.150f, 1.00f);
+    c[ImGuiCol_ScrollbarGrab]        = ImVec4(0.280f, 0.310f, 0.350f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.360f, 0.400f, 0.450f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.440f, 0.480f, 0.530f, 1.00f);
+    c[ImGuiCol_CheckMark]            = accent;
+    c[ImGuiCol_SliderGrab]           = accent;
+    c[ImGuiCol_SliderGrabActive]     = accentDim;
+    c[ImGuiCol_Button]               = ImVec4(0.185f, 0.210f, 0.240f, 1.00f);
+    c[ImGuiCol_ButtonHovered]        = ImVec4(0.240f, 0.270f, 0.310f, 1.00f);
+    c[ImGuiCol_ButtonActive]         = accentDim;
+    c[ImGuiCol_Header]               = ImVec4(0.200f, 0.350f, 0.260f, 1.00f);
+    c[ImGuiCol_HeaderHovered]        = ImVec4(0.230f, 0.420f, 0.310f, 1.00f);
+    c[ImGuiCol_HeaderActive]         = ImVec4(0.160f, 0.300f, 0.220f, 1.00f);
+    c[ImGuiCol_Separator]            = border;
+    c[ImGuiCol_SeparatorHovered]     = accent;
+    c[ImGuiCol_SeparatorActive]      = accent;
+    c[ImGuiCol_ResizeGrip]           = ImVec4(0.300f, 0.340f, 0.380f, 0.50f);
+    c[ImGuiCol_ResizeGripHovered]    = accent;
+    c[ImGuiCol_ResizeGripActive]     = accentDim;
+    c[ImGuiCol_Tab]                  = ImVec4(0.150f, 0.170f, 0.195f, 1.00f);
+    c[ImGuiCol_TabHovered]           = ImVec4(0.220f, 0.250f, 0.285f, 1.00f);
+    c[ImGuiCol_TabSelected]          = ImVec4(0.200f, 0.370f, 0.270f, 1.00f);
+    c[ImGuiCol_TabSelectedOverline]  = accent;
+    c[ImGuiCol_TabDimmed]            = ImVec4(0.120f, 0.135f, 0.155f, 1.00f);
+    c[ImGuiCol_TabDimmedSelected]    = ImVec4(0.170f, 0.280f, 0.215f, 1.00f);
+    c[ImGuiCol_TextSelectedBg]       = ImVec4(0.240f, 0.860f, 0.520f, 0.25f);
+    c[ImGuiCol_NavHighlight]         = accent;
+    c[ImGuiCol_ModalWindowDimBg]     = ImVec4(0.000f, 0.000f, 0.000f, 0.55f);
+    c[ImGuiCol_TableHeaderBg]        = header;
+    c[ImGuiCol_TableBorderStrong]    = border;
+    c[ImGuiCol_TableBorderLight]     = ImVec4(0.190f, 0.215f, 0.245f, 1.00f);
+    c[ImGuiCol_TableRowBg]           = panel;
+    c[ImGuiCol_TableRowBgAlt]        = panelAlt;
+}
+
 /// Build the ImGui-side font atlas (add fonts, Build).
 /// Does NOT touch the GPU texture.
 /// MUST be called BEFORE ImGui::NewFrame() (no frame active).
@@ -150,6 +214,7 @@ int main(int, char**) {
         style.TabRounding      = 4.0f;
         style.FrameRounding    = 3.0f;
     }
+    applyDarkTheme();
 
     // Apply style spacing to match font scale
     ImGui::GetStyle().ScaleAllSizes(settings.uiScale);

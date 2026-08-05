@@ -80,7 +80,7 @@ void HelpPanel::render() {
             ImGui::BulletText("暂停/继续 — 冻结日志流以便查看，不会丢失新数据。");
             ImGui::BulletText("清除 — 丢弃所有已缓冲的日志条目。");
             ImGui::BulletText("自动滚动 — 自动跟随新日志行。向上滚动时自动暂停，点击 \"Go Bottom\" 恢复。");
-            ImGui::BulletText("点击日志行可在侧边面板查看详情（时间戳、PID、TID、完整消息）。");
+            ImGui::BulletText("点击日志行可选中并在底部详情面板查看完整信息（时间戳、PID/TID、进程名、完整消息），右键行可快速复制。");
             ImGui::BulletText("PID→进程名映射自动解析运行中的应用。");
         } else {
             ImGui::TextWrapped("Real-time streaming of Android logcat output from the connected device.");
@@ -90,7 +90,7 @@ void HelpPanel::render() {
             ImGui::BulletText("Pause/Resume — freeze the log stream to inspect entries without new data arriving.");
             ImGui::BulletText("Clear — discard all buffered log entries.");
             ImGui::BulletText("Auto-scroll — automatically follows new log lines. Disabled when you scroll up; click \"Go Bottom\" to resume.");
-            ImGui::BulletText("Click a log line to view details (timestamps, PID, TID, full message) in the side panel.");
+            ImGui::BulletText("Click a log line to select it and view full details (timestamp, PID/TID, process name, full message) in the bottom detail panel; right-click a row to copy it.");
             ImGui::BulletText("PID-to-process-name mapping is resolved automatically for running apps.");
         }
     }

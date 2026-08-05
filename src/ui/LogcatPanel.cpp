@@ -13,7 +13,7 @@ void LogcatPanel::start(const std::string& deviceSerial) {
     m_pausedDeviceSerial = deviceSerial;
     m_displayEntries.clear();
     m_lastPushed = 0; m_lastRefreshTime = -1.0;
-    m_selectedIndex = -1;
+    m_selectedIndex = -1; m_showDetail = false; m_contextIndex = -1;
     m_autoScroll = true; m_userScrolledSinceDisable = false; m_pendingNew = 0; m_paused = false;
     m_reader.start(deviceSerial, m_logBuffer);
 }
@@ -24,6 +24,7 @@ void LogcatPanel::resume() { if (!m_paused) return; m_paused = false; m_reader.s
 void LogcatPanel::clearLogs() {
     m_logBuffer.clear(); m_displayEntries.clear();
     m_lastPushed = 0; m_lastRefreshTime = -1.0; m_selectedIndex = -1; m_pendingNew = 0;
+    m_showDetail = false; m_contextIndex = -1;
     m_userScrolledSinceDisable = false;
 }
 void LogcatPanel::onDeviceDisconnected() { stop(); clearLogs(); }
@@ -103,22 +104,45 @@ static bool IsMouseOverVerticalScrollbar() {
         && mouse.y <= wPos.y + wSize.y - hSb - 2.0f;
 }
 
+static const char* LevelName(char lvl) {
+    switch (lvl) {
+        case 'V': return "Verbose";
+        case 'D': return "Debug";
+        case 'I': return "Info";
+        case 'W': return "Warning";
+        case 'E': return "Error";
+        case 'F': return "Fatal";
+        default:  return "Unknown";
+    }
+}
+
 static void RenderDetailPanel(const LogEntry& entry) {
-    ImGui::Text("Time : "); ImGui::SameLine(70);
+    const ImVec4 labelCol(0.57f, 0.60f, 0.64f, 1.0f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(labelCol, "Time   "); ImGui::SameLine(95);
     if (entry.raw.size() >= 18) ImGui::Text("%.18s", entry.raw.c_str());
-    ImGui::Text("Level:"); ImGui::SameLine(70);
-    ImGui::TextColored(levelTextColor(entry.level), "%c", entry.level);
-    ImGui::Text("PID  :"); ImGui::SameLine(70); ImGui::Text("%d", entry.pid);
-    ImGui::Text("TID  :"); ImGui::SameLine(70); ImGui::Text("%d", entry.tid);
-    ImGui::Text("Tag  :"); ImGui::SameLine(70);
-    ImGui::TextColored(ImVec4(0.0f,0.85f,1.0f,1.0f), "%s", entry.tag.c_str());
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(labelCol, "Level  "); ImGui::SameLine(95);
+    ImGui::TextColored(levelTextColor(entry.level), "%c (%s)", entry.level, LevelName(entry.level));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(labelCol, "PID/TID"); ImGui::SameLine(95);
+    ImGui::Text("%d / %d", entry.pid, entry.tid);
+    if (!entry.processName.empty()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(labelCol, "Process"); ImGui::SameLine(95);
+        ImGui::TextColored(ImVec4(0.72f, 0.72f, 0.32f, 1.0f), "%s", entry.processName.c_str());
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(labelCol, "Tag    "); ImGui::SameLine(95);
+    ImGui::TextColored(ImVec4(0.35f, 0.78f, 1.0f, 1.0f), "%s", entry.tag.c_str());
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Message:");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Message");
     ImGui::SameLine();
     if (ImGui::SmallButton("Copy")) ImGui::SetClipboardText(entry.message.c_str());
-    ImGui::SameLine(); ImGui::TextDisabled("(use Raw Line for select+copy)");
-    ImGui::BeginChild("##detailMsgScroll", ImVec2(0, -4), false, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::SameLine(); ImGui::TextDisabled("(select text in Raw Line to copy)");
+    ImGui::BeginChild("##detailMsgScroll", ImVec2(0, -54), false, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextWrapped("%s", entry.message.c_str());
     ImGui::PopTextWrapPos();
@@ -132,40 +156,38 @@ static void RenderDetailPanel(const LogEntry& entry) {
 
 // ── main render ──
 void LogcatPanel::render(Settings& settings) {
+    // ── Filter row ──
     m_filterBar.render(settings);
 
-    // Auto-scroll checkbox
-    ImGui::SameLine();
+    // ── Action row ──
     if (ImGui::Checkbox("Auto-scroll", &m_autoScroll)) {
         if (m_autoScroll) enableAutoScroll();
         else m_userScrolledSinceDisable = false;
     }
-
-    // Go Bottom
     ImGui::SameLine();
-    if (ImGui::SmallButton("Go Bottom")) enableAutoScroll();
-
-    // Pause / Resume / Clear
+    if (ImGui::Button("Go Bottom")) enableAutoScroll();
     ImGui::SameLine();
     if (m_paused) { if (ImGui::Button("Resume")) resume(); }
-    else          { if (ImGui::Button("Pause")) pause(); }
+    else          { if (ImGui::Button("Pause"))  pause(); }
     ImGui::SameLine();
     if (ImGui::Button("Clear")) clearLogs();
+    ImGui::SameLine();
+    if (ImGui::Button(m_showDetail ? "Hide Details" : "Show Details")) m_showDetail = !m_showDetail;
 
-    // Stats
+    // ── Stats ──
     ImGui::SameLine();
     size_t total = m_logBuffer.size();
-    ImGui::TextColored(ImVec4(0.6f,0.6f,0.6f,1.f),
+    ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f),
         "Total: %zu / %zu | Filtered: %zu", total, m_logBuffer.DEFAULT_CAPACITY, m_displayEntries.size());
     if (m_pendingNew > 0) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.f,0.8f,0.2f,1.f), "| +%zu new", m_pendingNew);
+        ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.25f, 1.0f), "| +%zu new", m_pendingNew);
     }
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.5f,0.5f,0.5f,1.f),
+    ImGui::TextColored(ImVec4(0.48f, 0.50f, 0.54f, 1.0f),
         "| Lines: %lld/%lld", (long long)m_reader.parsedLines(), (long long)m_reader.totalLines());
-    if (m_paused) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1,0.8f,0,1), "[PAUSED]"); }
-    if (m_logBuffer.overflowed()) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1,0.5f,0,1), "[buffer full]"); }
+    if (m_paused) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1,0.85f,0.2f,1), "[PAUSED]"); }
+    if (m_logBuffer.overflowed()) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1,0.6f,0.15f,1), "[buffer full]"); }
     ImGui::Separator();
 
     // ── Refresh ──
@@ -181,122 +203,162 @@ void LogcatPanel::render(Settings& settings) {
     }
 
     float totalAvail = ImGui::GetContentRegionAvail().y;
-    float detailH = (m_selectedIndex >= 0) ? totalAvail * 0.35f : 0.0f;
-    float logH = (m_selectedIndex >= 0) ? totalAvail - detailH - 4.0f : 0.0f;
+    float detailH = (m_showDetail && m_selectedIndex >= 0) ? 230.0f : 0.0f;
+    float logH = totalAvail - detailH - (detailH > 0.0f ? 8.0f : 0.0f);
+    if (logH < 80.0f) logH = 80.0f;
 
     // ── Log view ──
-    ImGui::BeginChild("LogView", ImVec2(0, (m_selectedIndex >= 0) ? logH : 0),
-                      false, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::BeginChild("LogView", ImVec2(0, logH), true);
 
     int totalRows = (int)m_displayEntries.size();
     bool deselectThisFrame = false;
-    ImGuiListClipper clipper;
-    clipper.Begin(totalRows, ImGui::GetTextLineHeightWithSpacing());
+    bool rowRightClicked = false;
+    float rowH = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().CellPadding.y * 2.0f;
 
-    while (clipper.Step()) {
-        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
-            const auto& entry = m_displayEntries[i];
-            bool isSel = (i == m_selectedIndex);
+    if (ImGui::BeginTable("##logTable", 5,
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+            ImGuiTableFlags_BordersV | ImGuiTableFlags_Resizable)) {
+        ImGui::TableSetupColumn("Lvl", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 182.0f);
+        ImGui::TableSetupColumn("PID/TID", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+        ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+        ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
 
-            ImVec2 rowStart = ImGui::GetCursorScreenPos();
-            float rowH = ImGui::GetTextLineHeightWithSpacing();
-            float rowW = ImGui::GetContentRegionAvail().x;
+        ImGuiListClipper clipper;
+        clipper.Begin(totalRows, rowH);
+        while (clipper.Step()) {
+            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
+                const auto& entry = m_displayEntries[i];
+                bool isSel = (i == m_selectedIndex);
+                ImGui::PushID(i);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None, rowH);
 
-            if (isSel)
-                ImGui::GetWindowDrawList()->AddRectFilled(
-                    rowStart, ImVec2(rowStart.x+rowW, rowStart.y+rowH), IM_COL32(60,60,30,200));
+                if (isSel)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(36, 84, 54, 255));
 
-            ImGui::PushID(i);
-            ImGui::InvisibleButton("##row", ImVec2(rowW, rowH));
-            if (ImGui::IsItemClicked()) {
-                if (i == m_selectedIndex) {
-                    m_selectedIndex = -1; // deselect → unfreeze and show the latest
-                    deselectThisFrame = true;
-                } else {
-                    m_selectedIndex = i;  // select → freeze the view and stop auto-scroll
-                    m_autoScroll = false;
-                    m_userScrolledSinceDisable = false;
-                }
-            }
-            ImGui::PopID();
-
-            ImGui::SetCursorScreenPos(rowStart);
-            float bh = ImGui::GetTextLineHeight(), bw = bh * 0.65f;
-            ImGui::GetWindowDrawList()->AddRectFilled(rowStart, ImVec2(rowStart.x+bw, rowStart.y+bh), levelBgColor(entry.level), 3.f);
-            char lvlStr[2]={entry.level,0};
-            ImVec2 tsz = ImGui::CalcTextSize(lvlStr);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,1,1,1));
-            ImGui::SetCursorScreenPos(ImVec2(rowStart.x+(bw-tsz.x)*0.5f, rowStart.y));
-            ImGui::TextUnformatted(lvlStr);
-            ImGui::PopStyleColor();
-            ImGui::SetCursorScreenPos(ImVec2(rowStart.x+bw+5, rowStart.y));
-
-            ImVec4 lvlCol = levelTextColor(entry.level);
-            const char* raw = entry.raw.c_str();
-            if (!entry.tag.empty()) {
-                size_t tagPos = entry.raw.find(entry.tag);
-                if (tagPos != std::string::npos && tagPos > 0) {
-                    ImGui::TextColored(ImVec4(.55f,.55f,.55f,1), "%.*s", (int)tagPos, raw);
-                    ImGui::SameLine(0,0);
-                    ImGui::TextColored(ImVec4(0,.85f,1,1), "%22s", entry.tag.c_str());
-                    ImGui::SameLine(0,0);
-                    if (!entry.processName.empty()) {
-                        ImGui::TextColored(ImVec4(0.7f,0.7f,0.3f,1), "%25s", entry.processName.c_str());
-                        ImGui::SameLine(0,0);
+                // Row interaction (selectable spans all columns)
+                ImGui::TableSetColumnIndex(0);
+                ImVec2 cell0Pos = ImGui::GetCursorScreenPos(); // capture before selectable
+                if (ImGui::Selectable("##row", isSel, ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, rowH))) {
+                    if (i == m_selectedIndex) {
+                        m_selectedIndex = -1;   // deselect → unfreeze and show latest
+                        deselectThisFrame = true;
+                    } else {
+                        m_selectedIndex = i;    // select → freeze + show detail
+                        m_showDetail = true;
+                        m_autoScroll = false;
+                        m_userScrolledSinceDisable = false;
                     }
-                    ImGui::TextColored(lvlCol, "%s", raw + tagPos + entry.tag.size());
-                } else ImGui::TextColored(lvlCol, "%s", raw);
-            } else ImGui::TextColored(lvlCol, "%s", raw);
+                }
+                if (ImGui::IsItemHovered() && !isSel)
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(58, 64, 74, 255));
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                    m_contextIndex = i;
+                    rowRightClicked = true;
+                }
+
+                // Level badge + char
+                ImGui::SetCursorScreenPos(cell0Pos); // selectable advanced the cursor; snap back
+                {
+                    ImVec2 p = ImGui::GetCursorScreenPos();
+                    float bh = ImGui::GetTextLineHeight();
+                    float bw = bh * 0.8f;
+                    ImGui::GetWindowDrawList()->AddRectFilled(
+                        p, ImVec2(p.x + bw, p.y + bh), levelBgColor(entry.level), 3.0f);
+                    char lvl[2] = {entry.level, 0};
+                    ImVec2 tsz = ImGui::CalcTextSize(lvl);
+                    ImGui::SetCursorScreenPos(ImVec2(p.x + (bw - tsz.x) * 0.5f, p.y));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                    ImGui::TextUnformatted(lvl);
+                    ImGui::PopStyleColor();
+                }
+
+                // Time
+                ImGui::TableSetColumnIndex(1);
+                if (entry.raw.size() >= 18)
+                    ImGui::TextUnformatted(entry.raw.c_str(), entry.raw.c_str() + 18);
+
+                // PID/TID
+                ImGui::TableSetColumnIndex(2);
+                char pt[32];
+                snprintf(pt, sizeof(pt), "%d/%d", entry.pid, entry.tid);
+                ImGui::TextUnformatted(pt);
+
+                // Tag
+                ImGui::TableSetColumnIndex(3);
+                if (!entry.tag.empty())
+                    ImGui::TextColored(ImVec4(0.35f, 0.78f, 1.0f, 1.0f), "%s", entry.tag.c_str());
+
+                // Message (clipped to the column)
+                ImGui::TableSetColumnIndex(4);
+                {
+                    ImVec2 cMin = ImGui::GetCursorScreenPos();
+                    float cw = ImGui::GetColumnWidth();
+                    ImGui::PushClipRect(cMin, ImVec2(cMin.x + cw, cMin.y + rowH), true);
+                    ImGui::TextColored(levelTextColor(entry.level), "%s",
+                        entry.tag.empty() ? entry.raw.c_str() : entry.message.c_str());
+                    ImGui::PopClipRect();
+                }
+                ImGui::PopID();
+            }
         }
-    }
+        clipper.End();
 
-    clipper.End();
-    if (deselectThisFrame) refreshDisplay();
-
-    // Remember that the user actively scrolled while auto-scroll is off,
-    // so reaching the bottom again can re-engage it (instead of a stale "at bottom" state).
-    if (!m_autoScroll && ImGui::IsWindowHovered()) {
-        bool wheelActive = ImGui::GetIO().MouseWheel != 0.0f;
-        bool scrollbarHeld = ImGui::IsMouseDown(ImGuiMouseButton_Left) && IsMouseOverVerticalScrollbar();
-        if (wheelActive || scrollbarHeld)
-            m_userScrolledSinceDisable = true;
-    }
-
-    // ── Resume auto-scroll: Enter, or scrollbar dragged to the bottom ──
-    bool justEnabled = false;
-    bool userWheelUp = ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel > 0.01f;
-    if (!m_autoScroll && totalRows > 0) {
-        float scrollMaxY = ImGui::GetScrollMaxY();
-        bool atBottom = scrollMaxY <= 0.0f || ImGui::GetScrollY() >= scrollMaxY - 2.0f;
-        bool enter = ImGui::IsWindowHovered()
-            && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
-        if ((atBottom && m_userScrolledSinceDisable && !userWheelUp) || enter) {
-            enableAutoScroll();
-            justEnabled = true;
+        // ── Auto-scroll state machine (targets the table's scroll window) ──
+        bool userWheelUp = ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel > 0.01f;
+        if (!m_autoScroll && ImGui::IsWindowHovered()) {
+            bool wheelActive = ImGui::GetIO().MouseWheel != 0.0f;
+            bool scrollbarHeld = ImGui::IsMouseDown(ImGuiMouseButton_Left) && IsMouseOverVerticalScrollbar();
+            if (wheelActive || scrollbarHeld)
+                m_userScrolledSinceDisable = true;
         }
-    }
-
-    // ── User scrolls away (wheel up / scrollbar grab) → stop auto-scroll ──
-    if (m_autoScroll && !justEnabled && ImGui::IsWindowHovered()) {
-        bool wheelUp = ImGui::GetIO().MouseWheel > 0.01f;
-        bool scrollbarGrabbed = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && IsMouseOverVerticalScrollbar();
-        if (wheelUp || scrollbarGrabbed) {
-            m_autoScroll = false;
-            m_userScrolledSinceDisable = false;
+        bool justEnabled = false;
+        if (!m_autoScroll && totalRows > 0) {
+            float smy = ImGui::GetScrollMaxY();
+            bool atBottom = smy <= 0.0f || ImGui::GetScrollY() >= smy - 2.0f;
+            bool enter = ImGui::IsWindowHovered()
+                && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
+            if ((atBottom && m_userScrolledSinceDisable && !userWheelUp) || enter) {
+                enableAutoScroll();
+                justEnabled = true;
+            }
         }
+        if (m_autoScroll && !justEnabled && ImGui::IsWindowHovered()) {
+            bool wheelUp = ImGui::GetIO().MouseWheel > 0.01f;
+            bool scrollbarGrabbed = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && IsMouseOverVerticalScrollbar();
+            if (wheelUp || scrollbarGrabbed) {
+                m_autoScroll = false;
+                m_userScrolledSinceDisable = false;
+            }
+        }
+        if (m_autoScroll && totalRows > 0) {
+            float maxY = ImGui::GetScrollMaxY();
+            if (maxY > 0.0f)
+                ImGui::SetScrollY(maxY);
+        }
+        ImGui::EndTable();
     }
-
-    // ── Scroll to bottom when auto-scrolling ──
-    if (m_autoScroll && totalRows > 0) {
-        float maxY = ImGui::GetScrollMaxY();
-        if (maxY > 0.0f)
-            ImGui::SetScrollY(maxY);
-    }
-
     ImGui::EndChild();
 
+    if (deselectThisFrame) refreshDisplay();
+
+    // ── Row context menu ──
+    if (rowRightClicked) ImGui::OpenPopup("LogRowContext");
+    if (ImGui::BeginPopup("LogRowContext")) {
+        if (m_contextIndex >= 0 && m_contextIndex < (int)m_displayEntries.size()) {
+            const auto& e = m_displayEntries[m_contextIndex];
+            if (ImGui::MenuItem("Copy Message")) ImGui::SetClipboardText(e.message.c_str());
+            if (ImGui::MenuItem("Copy Raw Line")) ImGui::SetClipboardText(e.raw.c_str());
+            if (!e.tag.empty() && ImGui::MenuItem("Copy Tag")) ImGui::SetClipboardText(e.tag.c_str());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Clear Logs")) clearLogs();
+        }
+        ImGui::EndPopup();
+    }
+
     // ── Detail panel ──
-    if (m_selectedIndex >= 0 && m_selectedIndex < totalRows) {
+    if (m_showDetail && m_selectedIndex >= 0 && m_selectedIndex < totalRows) {
         ImGui::Separator();
         ImGui::BeginChild("DetailPanel", ImVec2(0, detailH), true);
         RenderDetailPanel(m_displayEntries[m_selectedIndex]);

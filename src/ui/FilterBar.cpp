@@ -9,21 +9,29 @@ static const char  kLevelChars[] = {'V', 'D', 'I', 'W', 'E', 'F'};
 void FilterBar::render(Settings& settings) {
     // --- Text filter ---
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Filter:");
+    ImGui::TextUnformatted("Keyword:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(180);
+    ImGui::SetNextItemWidth(200);
     if (m_textBuf[0] == '\0' && !m_textFilter.empty()) {
         std::strncpy(m_textBuf, m_textFilter.c_str(), sizeof(m_textBuf) - 1);
     }
     if (ImGui::InputTextWithHint("##textFilter", "keyword...", m_textBuf, sizeof(m_textBuf))) {
         m_textFilter = m_textBuf;
     }
+    if (!m_textFilter.empty()) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(" X ##clearText")) {
+            m_textFilter.clear();
+            m_textBuf[0] = '\0';
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear keyword filter");
+    }
     ImGui::SameLine();
 
     // --- Tag filter + clear button ---
     ImGui::TextUnformatted("Tag:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(160);
+    ImGui::SetNextItemWidth(190);
     if (m_tagBuf[0] == '\0' && !m_tagFilter.empty()) {
         std::strncpy(m_tagBuf, m_tagFilter.c_str(), sizeof(m_tagBuf) - 1);
     }

@@ -824,7 +824,6 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
     }
 
     ImGui::Separator();
-    if (!m_hasData) return;
 
     Info d;
     {
@@ -832,8 +831,8 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
         d = m_info;
     }
 
-    // ── System Info Card ──
-    if (ImGui::CollapsingHeader("System", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // ── System / Memory info cards (only when data has been loaded) ──
+    if (m_hasData && ImGui::CollapsingHeader("System", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::BeginTable("##sysinfo", 2, ImGuiTableFlags_RowBg)) {
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 100);
             ImGui::TableSetupColumn("");
@@ -897,8 +896,7 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
         }
     }
 
-    // ── Memory Card ──
-    if (ImGui::CollapsingHeader("Memory", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (m_hasData && ImGui::CollapsingHeader("Memory", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (d.memPercent >= 0) {
             float r = 0.4f, g = 0.9f, b = 0.4f;
             if (d.memPercent > 90) { r = 0.9f; g = 0.2f; b = 0.2f; }

@@ -69,6 +69,7 @@ private:
     std::vector<std::string> m_knownSerials;
     std::string m_newDeviceSerial;
     std::atomic<bool> m_newDeviceFlag{false};
+    bool m_hasSeenDevices = false;   // set after first refresh completes
     mutable std::mutex m_mutex;
     std::atomic<bool> m_refreshDone{false};
     std::atomic<bool> m_refreshing{false};

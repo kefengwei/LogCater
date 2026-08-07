@@ -105,6 +105,7 @@ target_link_libraries(logcater PRIVATE
     nlohmann_json::nlohmann_json
     opengl32
     comdlg32
+    gdiplus
 )
 
 # Version for auto-update check

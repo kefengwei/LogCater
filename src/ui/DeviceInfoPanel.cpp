@@ -1,8 +1,16 @@
 #include "DeviceInfoPanel.h"
 #include "core/AdbProcess.h"
+#include "core/Settings.h"
 #include "imgui.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #include <commdlg.h>
+#include <gdiplus.h>
+#include <GL/gl.h>
+#include <shellapi.h>
+#include <algorithm>
 #include <regex>
 #include <sstream>
 #include <thread>
@@ -13,23 +21,30 @@
 #include <mutex>
 #include <vector>
 #include <chrono>
+#include <functional>
+
+#pragma comment(lib, "gdiplus.lib")
+
+using namespace Gdiplus;
+
+static ULONG_PTR g_gdiplusToken = 0;
+
+DeviceInfoPanel::DeviceInfoPanel() {
+    GdiplusStartupInput in;
+    GdiplusStartup(&g_gdiplusToken, &in, nullptr);
+}
+
+DeviceInfoPanel::~DeviceInfoPanel() {
+    destroyPreview();
+    if (g_gdiplusToken) {
+        GdiplusShutdown(g_gdiplusToken);
+        g_gdiplusToken = 0;
+    }
+}
 
 // ─── Screen capture helpers ───────────────────────────────────────
 
 namespace {
-
-std::string pickSavePath(const char* defaultName, const char* filter, const char* defExt) {
-    char path[MAX_PATH] = {};
-    std::snprintf(path, sizeof(path), "%s", defaultName);
-    OPENFILENAMEA ofn = {};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.lpstrFilter = filter;
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = defExt;
-    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-    return GetSaveFileNameA(&ofn) ? std::string(path) : std::string();
-}
 
 std::string timestampName(const char* prefix, const char* ext) {
     SYSTEMTIME st;
@@ -42,15 +57,192 @@ std::string timestampName(const char* prefix, const char* ext) {
 
 } // namespace
 
+// ─── Capture / cache helpers ─────────────────────────────────────
+
+std::string DeviceInfoPanel::appDataBase() {
+    std::string p = Settings::defaultPath(); // ...\LogCater\settings.json
+    size_t pos = p.find_last_of("\\/");
+    return pos == std::string::npos ? "LogCater" : p.substr(0, pos);
+}
+
+std::string DeviceInfoPanel::capturesDirFor(const std::string& serial) {
+    std::string safe = serial;
+    std::replace(safe.begin(), safe.end(), ':', '_');
+    std::string base = appDataBase() + "\\captures";
+    CreateDirectoryA(base.c_str(), nullptr);
+    std::string dir = base + "\\" + safe;
+    CreateDirectoryA(dir.c_str(), nullptr);
+    return dir;
+}
+
+void DeviceInfoPanel::destroyPreview() {
+    if (m_previewTexture) {
+        glDeleteTextures(1, &m_previewTexture);
+        m_previewTexture = 0;
+    }
+    m_previewW = m_previewH = 0;
+}
+
+void DeviceInfoPanel::loadPreview(const std::string& path) {
+    destroyPreview();
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) return;
+    std::wstring wpath(wlen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], wlen);
+
+    Bitmap bmp(wpath.c_str());
+    if (bmp.GetLastStatus() != Ok) return;
+    m_previewW = bmp.GetWidth();
+    m_previewH = bmp.GetHeight();
+    if (m_previewW <= 0 || m_previewH <= 0) return;
+
+    Rect r(0, 0, m_previewW, m_previewH);
+    BitmapData data;
+    if (bmp.LockBits(&r, ImageLockModeRead, PixelFormat32bppARGB, &data) != Ok) return;
+
+    glGenTextures(1, &m_previewTexture);
+    glBindTexture(GL_TEXTURE_2D, m_previewTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_previewW, m_previewH, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, data.Scan0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    bmp.UnlockBits(&data);
+}
+
+void DeviceInfoPanel::openInExplorer(const std::string& path) {
+    ShellExecuteA(nullptr, "open", "explorer.exe",
+                  ("/select,\"" + path + "\"").c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+void DeviceInfoPanel::scanCaptures(const std::string& deviceSerial) {
+    if (deviceSerial.empty()) return;
+    std::string dir = capturesDirFor(deviceSerial);
+    std::vector<CaptureEntry> entries;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                CaptureEntry e;
+                e.name = fd.cFileName;
+                e.path = dir + "\\" + fd.cFileName;
+                e.sizeBytes = ((int64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+                std::string lower = e.name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                e.isImage = lower.find(".png") != std::string::npos;
+                entries.push_back(std::move(e));
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const CaptureEntry& a, const CaptureEntry& b) { return a.name > b.name; });
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_captures = std::move(entries);
+        if (m_selectedCapture >= (int)m_captures.size()) m_selectedCapture = -1;
+        if (m_exportPending >= (int)m_captures.size()) m_exportPending = -1;
+    }
+}
+
+void DeviceInfoPanel::exportCapture(const std::string& deviceSerial, int index) {
+    (void)deviceSerial;
+    CaptureEntry e;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (index < 0 || index >= (int)m_captures.size()) return;
+        e = m_captures[index];
+    }
+    char path[MAX_PATH] = {};
+    std::snprintf(path, sizeof(path), "%s", e.name.c_str());
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    if (!GetSaveFileNameA(&ofn)) return;
+    if (!CopyFileA(e.path.c_str(), path, FALSE)) return;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_exportPending = index;   // UI asks whether to delete the cache copy
+}
+
+void DeviceInfoPanel::deleteCapture(const std::string& deviceSerial, int index) {
+    std::string path;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (index < 0 || index >= (int)m_captures.size()) return;
+        path = m_captures[index].path;
+    }
+    DeleteFileA(path.c_str());
+    scanCaptures(deviceSerial);
+}
+
+void DeviceInfoPanel::clearAllCaptures(const std::string& deviceSerial) {
+    std::vector<std::string> paths;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        for (auto& c : m_captures) paths.push_back(c.path);
+    }
+    for (auto& p : paths) DeleteFileA(p.c_str());
+    scanCaptures(deviceSerial);
+}
+
+void DeviceInfoPanel::scanBugreport(const std::string& deviceSerial) {
+    (void)deviceSerial;
+    std::string root;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        root = m_bugreportDir;
+    }
+    if (root.empty()) return;
+
+    std::vector<BugreportFile> files;
+    std::function<void(const std::string&)> walk = [&](const std::string& d) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((d + "\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (fd.cFileName[0] != '.') walk(d + "\\" + fd.cFileName);
+            } else {
+                std::string name = fd.cFileName;
+                std::string lower = name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                static const char* keys[] = {"tombstone", "anr", "traces", "dropbox",
+                                             "dumpstate", "event"};
+                bool key = false;
+                for (auto k : keys) {
+                    if (lower.find(k) != std::string::npos) { key = true; break; }
+                }
+                if (key) {
+                    BugreportFile f;
+                    f.name = name;
+                    f.path = d + "\\" + name;
+                    f.sizeBytes = ((int64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+                    files.push_back(std::move(f));
+                }
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    };
+    walk(root);
+    std::sort(files.begin(), files.end(),
+              [](const BugreportFile& a, const BugreportFile& b) { return a.name < b.name; });
+    if (files.size() > 200) files.resize(200);
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_bugreportFiles = std::move(files);
+    }
+}
+
 void DeviceInfoPanel::takeScreenshot(const std::string& deviceSerial) {
     if (deviceSerial.empty() || m_actionRunning.load()) return;
-    std::string local = pickSavePath(
-        timestampName("screenshot", "png").c_str(),
-        "PNG Image (*.png)\0*.png\0All Files (*.*)\0*.*\0", "png");
-    if (local.empty()) return;
+    std::string local = capturesDirFor(deviceSerial) + "\\" + timestampName("screenshot", "png");
 
     m_actionRunning.store(true);
-    m_actionMsg = "Capturing screenshot...";
+    { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = "Capturing screenshot..."; }
     m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
 
     std::thread([this, deviceSerial, local]() {
@@ -70,8 +262,8 @@ void DeviceInfoPanel::takeScreenshot(const std::string& deviceSerial) {
             p.waitForExit(30000);
             p.stop();
             bool ok = out.find("1 file pulled") != std::string::npos;
-            m_actionMsg = ok ? "Screenshot saved: " + local
-                             : "Screenshot failed: " + (out.empty() ? "no output" : out);
+            { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = ok ? "Screenshot saved: " + local
+                             : "Screenshot failed: " + (out.empty() ? "no output" : out); }
         }
         {
             AdbProcess p;
@@ -82,6 +274,7 @@ void DeviceInfoPanel::takeScreenshot(const std::string& deviceSerial) {
         }
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
         m_actionRunning.store(false);
+        scanCaptures(deviceSerial);
     }).detach();
 }
 
@@ -89,13 +282,10 @@ void DeviceInfoPanel::takeScreenrecord(const std::string& deviceSerial, int seco
     if (deviceSerial.empty() || m_actionRunning.load()) return;
     if (seconds < 3) seconds = 3;
     if (seconds > 180) seconds = 180;
-    std::string local = pickSavePath(
-        timestampName("screenrecord", "mp4").c_str(),
-        "MP4 Video (*.mp4)\0*.mp4\0All Files (*.*)\0*.*\0", "mp4");
-    if (local.empty()) return;
+    std::string local = capturesDirFor(deviceSerial) + "\\" + timestampName("screenrecord", "mp4");
 
     m_actionRunning.store(true);
-    m_actionMsg = "Recording for " + std::to_string(seconds) + "s...";
+    { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = "Recording for " + std::to_string(seconds) + "s..."; }
     m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
 
     std::thread([this, deviceSerial, local, seconds]() {
@@ -116,8 +306,8 @@ void DeviceInfoPanel::takeScreenrecord(const std::string& deviceSerial, int seco
             p.waitForExit(60000);
             p.stop();
             bool ok = out.find("1 file pulled") != std::string::npos;
-            m_actionMsg = ok ? "Recording saved: " + local
-                             : "Recording failed: " + (out.empty() ? "no output" : out);
+            { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = ok ? "Recording saved: " + local
+                             : "Recording failed: " + (out.empty() ? "no output" : out); }
         }
         {
             AdbProcess p;
@@ -128,6 +318,7 @@ void DeviceInfoPanel::takeScreenrecord(const std::string& deviceSerial, int seco
         }
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
         m_actionRunning.store(false);
+        scanCaptures(deviceSerial);
     }).detach();
 }
 
@@ -150,13 +341,12 @@ void DeviceInfoPanel::runDumpsys(const std::string& deviceSerial, const std::str
 
 void DeviceInfoPanel::takeBugreport(const std::string& deviceSerial) {
     if (deviceSerial.empty() || m_actionRunning.load()) return;
-    std::string local = pickSavePath(
-        timestampName("bugreport", "zip").c_str(),
-        "Bugreport ZIP (*.zip)\0*.zip\0All Files (*.*)\0*.*\0", "zip");
-    if (local.empty()) return;
+    std::string dir = appDataBase() + "\\bugreports";
+    CreateDirectoryA(dir.c_str(), nullptr);
+    std::string local = dir + "\\" + timestampName("bugreport", "zip");
 
     m_actionRunning.store(true);
-    m_actionMsg = "Collecting bugreport (may take a minute)...";
+    { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = "Collecting bugreport (may take a minute)..."; }
     m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
 
     std::thread([this, deviceSerial, local]() {
@@ -169,8 +359,20 @@ void DeviceInfoPanel::takeBugreport(const std::string& deviceSerial) {
         bool ok = out.find("Bugreport") != std::string::npos ||
                   out.find("saved") != std::string::npos ||
                   out.empty(); // bugreport prints progress; empty output usually means file written
-        m_actionMsg = ok ? "Bugreport saved: " + local
-                         : "Bugreport failed: " + (out.empty() ? "no output" : out);
+        { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = ok ? "Bugreport saved: " + local
+                         : "Bugreport failed: " + (out.empty() ? "no output" : out); }
+        // Expand the ZIP so we can list key files (tombstones, ANR traces...)
+        std::string extractDir = local.substr(0, local.size() - 4); // strip .zip
+        {
+            std::string ps = "powershell -NoProfile -Command \"Expand-Archive -Path '" +
+                             local + "' -DestinationPath '" + extractDir + "' -Force\"";
+            std::system(ps.c_str());
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_bugreportDir = extractDir;
+        }
+        scanBugreport(deviceSerial);
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 12.0f;
         m_actionRunning.store(false);
     }).detach();
@@ -180,14 +382,10 @@ void DeviceInfoPanel::takePerfetto(const std::string& deviceSerial, int seconds)
     if (deviceSerial.empty() || m_actionRunning.load()) return;
     if (seconds < 3) seconds = 3;
     if (seconds > 120) seconds = 120;
-    std::string local = pickSavePath(
-        timestampName("trace", "perfetto-trace").c_str(),
-        "Perfetto Trace (*.perfetto-trace)\0*.perfetto-trace\0All Files (*.*)\0*.*\0",
-        "perfetto-trace");
-    if (local.empty()) return;
+    std::string local = capturesDirFor(deviceSerial) + "\\" + timestampName("trace", "perfetto-trace");
 
     m_actionRunning.store(true);
-    m_actionMsg = "Capturing " + std::to_string(seconds) + "s Perfetto trace...";
+    { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = "Capturing " + std::to_string(seconds) + "s Perfetto trace..."; }
     m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
 
     std::thread([this, deviceSerial, local, seconds]() {
@@ -209,8 +407,8 @@ void DeviceInfoPanel::takePerfetto(const std::string& deviceSerial, int seconds)
             p.waitForExit(60000);
             p.stop();
             bool ok = out.find("1 file pulled") != std::string::npos;
-            m_actionMsg = ok ? "Trace saved: " + local
-                             : "Trace failed: " + (out.empty() ? "no output (may need shell permission)" : out);
+            { std::lock_guard<std::mutex> lock(m_stateMutex); m_actionMsg = ok ? "Trace saved: " + local
+                             : "Trace failed: " + (out.empty() ? "no output (may need shell permission)" : out); }
         }
         {
             AdbProcess p;
@@ -221,6 +419,7 @@ void DeviceInfoPanel::takePerfetto(const std::string& deviceSerial, int seconds)
         }
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
         m_actionRunning.store(false);
+        scanCaptures(deviceSerial);
     }).detach();
 }
 
@@ -340,7 +539,7 @@ void DeviceInfoPanel::refreshForwards(const std::string& deviceSerial) {
                    [&](const std::string& l) { out += l + "\n"; });
         proc.waitForExit(5000);
         proc.stop();
-        m_forwardOutput = out.empty() ? "(no forward rules)" : out;
+        { std::lock_guard<std::mutex> lock(m_stateMutex); m_forwardOutput = out.empty() ? "(no forward rules)" : out; }
     }).detach();
 }
 
@@ -527,8 +726,7 @@ void DeviceInfoPanel::refresh(const std::string& deviceSerial) {
         parseUptime(uptimeOut, info);
 
         info.valid = true;
-        m_info = info;
-        m_hasData = true;
+        { std::lock_guard<std::mutex> lock(m_stateMutex); m_info = info; m_hasData = true; }
         m_loading.store(false);
     }).detach();
 }
@@ -606,19 +804,30 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Capture a Perfetto trace (uses the seconds field, 3-120s)");
     ImGui::SameLine();
+    std::string actionMsg;
+    float actionEnd = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        actionMsg = m_actionMsg;
+        actionEnd = m_actionMsgEnd;
+    }
     if (m_actionRunning.load()) {
-        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", m_actionMsg.c_str());
-    } else if (!m_actionMsg.empty() && ImGui::GetTime() < m_actionMsgEnd) {
-        bool failed = m_actionMsg.find("failed") != std::string::npos;
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", actionMsg.c_str());
+    } else if (!actionMsg.empty() && ImGui::GetTime() < actionEnd) {
+        bool failed = actionMsg.find("failed") != std::string::npos;
         ImGui::TextColored(failed ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
                                   : ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                           "%s", m_actionMsg.c_str());
+                           "%s", actionMsg.c_str());
     }
 
     ImGui::Separator();
     if (!m_hasData) return;
 
-    const Info& d = m_info;
+    Info d;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        d = m_info;
+    }
 
     // ── System Info Card ──
     if (ImGui::CollapsingHeader("System", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -863,9 +1072,138 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
 
         ImGui::BeginChild("FwdOut", ImVec2(0, 100), true,
                           ImGuiWindowFlags_HorizontalScrollbar);
-        if (!m_forwardOutput.empty()) {
-            ImGui::TextUnformatted(m_forwardOutput.c_str());
+        std::string fwdOut;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            fwdOut = m_forwardOutput;
+        }
+        if (!fwdOut.empty()) {
+            ImGui::TextUnformatted(fwdOut.c_str());
         }
         ImGui::EndChild();
+    }
+
+    // ── Captures (screenshots / recordings / traces) ──
+    if (ImGui::CollapsingHeader("Captures", ImGuiTreeNodeFlags_DefaultOpen)) {
+        std::vector<CaptureEntry> caps;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            caps = m_captures;
+        }
+        if (ImGui::Button("Refresh List")) scanCaptures(deviceSerial);
+        ImGui::SameLine();
+        if (ImGui::Button("Open Folder")) {
+            openInExplorer(capturesDirFor(deviceSerial) + "\\");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("ui.perfetto.dev")) {
+            ShellExecuteA(nullptr, "open", "https://ui.perfetto.dev",
+                          nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        ImGui::SameLine();
+        if (!caps.empty() && ImGui::Button("Clear All")) {
+            clearAllCaptures(deviceSerial);
+        }
+
+        if (caps.empty()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+                               "No captures yet. Use Screenshot / Record / Perfetto above.");
+        } else {
+            ImGui::BeginChild("CaptureList", ImVec2(0, 160), true);
+            for (int i = 0; i < (int)caps.size(); i++) {
+                const auto& c = caps[i];
+                ImGui::PushID(i);
+                char sizeBuf[32];
+                if (c.sizeBytes >= 1024 * 1024)
+                    std::snprintf(sizeBuf, sizeof(sizeBuf), "%.1f MB", c.sizeBytes / 1048576.0);
+                else if (c.sizeBytes >= 1024)
+                    std::snprintf(sizeBuf, sizeof(sizeBuf), "%.1f KB", c.sizeBytes / 1024.0);
+                else
+                    std::snprintf(sizeBuf, sizeof(sizeBuf), "%lld B", (long long)c.sizeBytes);
+                if (ImGui::Selectable((c.name + "  [" + sizeBuf + "]").c_str(),
+                                      m_selectedCapture == i)) {
+                    m_selectedCapture = i;
+                    if (c.isImage) loadPreview(c.path);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Export")) exportCapture(deviceSerial, i);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Del")) deleteCapture(deviceSerial, i);
+                if (!c.isImage) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Open")) {
+                        ShellExecuteA(nullptr, "open", c.path.c_str(),
+                                      nullptr, nullptr, SW_SHOWNORMAL);
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+        }
+
+        // Image preview
+        if (m_previewTexture) {
+            float availW = ImGui::GetContentRegionAvail().x;
+            float scale = availW / m_previewW;
+            if (scale > 1.0f) scale = 1.0f;
+            float scaleH = 420.0f / m_previewH;
+            if (scale > scaleH) scale = scaleH;
+            ImGui::Image((ImTextureID)(intptr_t)m_previewTexture,
+                         ImVec2(m_previewW * scale, m_previewH * scale));
+        }
+
+        // Export-done confirm: delete the cache copy?
+        int pendingIdx = -1;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            pendingIdx = m_exportPending;
+            m_exportPending = -1;
+        }
+        if (pendingIdx >= 0) ImGui::OpenPopup("ExportDone");
+        if (ImGui::BeginPopupModal("ExportDone", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Exported successfully. Delete the cache copy?");
+            ImGui::Separator();
+            if (ImGui::Button("Keep", ImVec2(100, 0))) ImGui::CloseCurrentPopup();
+            ImGui::SameLine();
+            if (ImGui::Button("Delete", ImVec2(100, 0))) {
+                deleteCapture(deviceSerial, pendingIdx);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    // ── Bugreport files ──
+    if (ImGui::CollapsingHeader("Bugreport Files", ImGuiTreeNodeFlags_DefaultOpen)) {
+        std::vector<BugreportFile> files;
+        std::string bugDir;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            files = m_bugreportFiles;
+            bugDir = m_bugreportDir;
+        }
+        if (!bugDir.empty() && ImGui::Button("Open Folder")) {
+            openInExplorer(bugDir + "\\");
+        }
+        if (files.empty()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+                               "No bugreport collected yet. Use the Bugreport button above.");
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                               "%zu key file(s) (tombstones / ANR / traces / dropbox):",
+                               files.size());
+            ImGui::BeginChild("BugList", ImVec2(0, 140), true);
+            for (const auto& f : files) {
+                ImGui::PushID(f.name.c_str());
+                char sizeBuf[32];
+                std::snprintf(sizeBuf, sizeof(sizeBuf), "%lld B", (long long)f.sizeBytes);
+                if (ImGui::Selectable((f.name + "  [" + sizeBuf + "]").c_str())) {
+                    ShellExecuteA(nullptr, "open", f.path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", f.path.c_str());
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+        }
     }
 }

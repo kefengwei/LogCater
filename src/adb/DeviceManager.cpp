@@ -99,15 +99,19 @@ void DeviceManager::refreshAsync() {
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            // Detect devices that appeared since the previous refresh
-            std::set<std::string> known(m_knownSerials.begin(), m_knownSerials.end());
-            for (const auto& d : newDevices) {
-                if (!known.count(d.serial)) {
-                    m_newDeviceSerial = d.serial;
-                    m_newDeviceFlag = true;
-                    break;
+            // Detect devices that appeared since the previous refresh.
+            // The very first refresh only records the baseline (no popup).
+            if (m_hasSeenDevices) {
+                std::set<std::string> known(m_knownSerials.begin(), m_knownSerials.end());
+                for (const auto& d : newDevices) {
+                    if (!known.count(d.serial)) {
+                        m_newDeviceSerial = d.serial;
+                        m_newDeviceFlag = true;
+                        break;
+                    }
                 }
             }
+            m_hasSeenDevices = true;
             m_knownSerials.clear();
             for (const auto& d : newDevices) {
                 m_knownSerials.push_back(d.serial);

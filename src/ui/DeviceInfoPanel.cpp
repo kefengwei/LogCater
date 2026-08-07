@@ -275,6 +275,7 @@ void DeviceInfoPanel::takeScreenshot(const std::string& deviceSerial) {
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
         m_actionRunning.store(false);
         scanCaptures(deviceSerial);
+        m_autoSelectCapture.store(true);
     }).detach();
 }
 
@@ -319,6 +320,7 @@ void DeviceInfoPanel::takeScreenrecord(const std::string& deviceSerial, int seco
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
         m_actionRunning.store(false);
         scanCaptures(deviceSerial);
+        m_autoSelectCapture.store(true);
     }).detach();
 }
 
@@ -420,6 +422,7 @@ void DeviceInfoPanel::takePerfetto(const std::string& deviceSerial, int seconds)
         m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
         m_actionRunning.store(false);
         scanCaptures(deviceSerial);
+        m_autoSelectCapture.store(true);
     }).detach();
 }
 
@@ -1089,6 +1092,13 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             caps = m_captures;
+        }
+        // Auto-select the newest capture right after a capture completes
+        if (m_autoSelectCapture.exchange(false) && !caps.empty()) {
+            m_selectedCapture = 0;
+            if (caps[0].isImage) {
+                loadPreview(caps[0].path);
+            }
         }
         if (ImGui::Button("Refresh List")) scanCaptures(deviceSerial);
         ImGui::SameLine();

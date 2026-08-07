@@ -109,6 +109,7 @@ private:
     unsigned int m_previewTexture = 0;   // GL texture for the selected PNG
     int m_previewW = 0, m_previewH = 0;
     int m_exportPending = -1;            // capture index awaiting "delete cache?" confirm
+    std::atomic<bool> m_autoSelectCapture{false}; // select newest after capture
 
     void scanCaptures(const std::string& deviceSerial);
     void exportCapture(const std::string& deviceSerial, int index);

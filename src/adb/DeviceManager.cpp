@@ -4,9 +4,62 @@
 #include <sstream>
 #include <set>
 #include <thread>
+#include <chrono>
 
 DeviceManager::DeviceManager() = default;
 DeviceManager::~DeviceManager() = default;
+
+void DeviceManager::autoConnectMdns() {
+    // Throttle: only attempt once per 10 seconds
+    static auto lastTry = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (now - lastTry < std::chrono::seconds(10)) return;
+    lastTry = now;
+
+    // Discover WiFi ADB services (works for both classic "_adb._tcp" and
+    // Android 11+ "_adb-tls-connect._tcp")
+    AdbProcess mdns;
+    std::vector<std::string> found;
+    mdns.start({"mdns", "services"}, [&](const std::string& line) {
+        if (line.find("_adb-tls-connect._tcp") == std::string::npos &&
+            line.find("_adb._tcp") == std::string::npos) {
+            return;
+        }
+        // Address token varies by adb version: "ip:port type name" or
+        // "name type ip:port". Pick any token that looks like an ip:port.
+        std::istringstream iss(line);
+        std::string tok;
+        while (iss >> tok) {
+            if (tok.find(':') != std::string::npos &&
+                tok.find('_') == std::string::npos &&
+                tok.find('.') != std::string::npos) {
+                found.push_back(tok);
+                break;
+            }
+        }
+    });
+    mdns.waitForExit(3000);
+    mdns.stop();
+    if (found.empty()) return;
+
+    // Skip services already present in the device list
+    std::set<std::string> known;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& d : m_devices) {
+            known.insert(d.serial);
+        }
+    }
+
+    for (const auto& addr : found) {
+        if (known.count(addr)) continue;
+        AdbProcess conn;
+        std::string out;
+        conn.start({"connect", addr}, [&](const std::string& l) { out += l; });
+        conn.waitForExit(5000);
+        conn.stop();
+    }
+}
 
 void DeviceManager::refreshAsync() {
     // Prevent concurrent refresh threads
@@ -14,6 +67,9 @@ void DeviceManager::refreshAsync() {
     if (!m_refreshing.compare_exchange_strong(expected, true)) return;
 
     std::thread([this]() {
+        // Auto-connect WiFi devices discovered via mDNS before listing
+        autoConnectMdns();
+
         std::vector<Device> newDevices;
 
         AdbProcess proc;

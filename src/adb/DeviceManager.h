@@ -64,6 +64,11 @@ private:
     mutable std::mutex m_mutex;
     std::atomic<bool> m_refreshDone{false};
     std::atomic<bool> m_refreshing{false};
+
+    /// Discover WiFi ADB devices via "adb mdns services" and connect to any
+    /// not already in the device list. Throttled to once per 10 seconds.
+    void autoConnectMdns();
+
     std::unordered_map<int, std::string> m_processMap;
     mutable std::mutex m_processMutex;
     std::atomic<bool> m_processMapPending{false};

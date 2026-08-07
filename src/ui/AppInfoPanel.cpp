@@ -5,11 +5,120 @@
 #include <regex>
 #include <sstream>
 #include <cstring>
+#include <cctype>
+#include <cstdio>
 #include <algorithm>
 #include <set>
+#include <Windows.h>
+#include <commdlg.h>
+
+// Global file drop queue from main.cpp
+extern std::vector<std::string> g_droppedFiles;
+extern std::mutex g_dropMutex;
+
+namespace {
+
+std::string pickApkFile() {
+    char buf[MAX_PATH] = {};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "APK Files (*.apk)\0*.apk\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrTitle = "Select APK to install";
+    if (GetOpenFileNameA(&ofn)) {
+        return std::string(buf);
+    }
+    return "";
+}
+
+bool endsWithLower(const std::string& s, const char* suffix) {
+    size_t n = std::strlen(suffix);
+    if (s.size() < n) return false;
+    for (size_t i = 0; i < n; i++) {
+        if (std::tolower(static_cast<unsigned char>(s[s.size() - n + i])) != suffix[i])
+            return false;
+    }
+    return true;
+}
+
+std::string fileNameOf(const std::string& path) {
+    size_t pos = path.find_last_of("\\/");
+    return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+} // namespace
 
 AppInfoPanel::AppInfoPanel() = default;
 AppInfoPanel::~AppInfoPanel() = default;
+
+void AppInfoPanel::showToast(const std::string& msg, const ImVec4& color) {
+    m_toastMsg = msg;
+    m_toastColor = color;
+    m_toastEndTime = static_cast<float>(ImGui::GetTime()) + 4.0f;
+}
+
+void AppInfoPanel::renderToast() {
+    if (m_toastMsg.empty() || ImGui::GetTime() >= m_toastEndTime) return;
+
+    const ImVec2 textSize = ImGui::CalcTextSize(m_toastMsg.c_str());
+    const ImVec2 pad(24.0f, 12.0f);
+    const ImVec2 size(textSize.x + pad.x * 2.0f, textSize.y + pad.y * 2.0f);
+    const ImVec2 pos((ImGui::GetWindowWidth() - size.x) * 0.5f, 48.0f);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                      IM_COL32(30, 30, 34, 235), 6.0f);
+    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                IM_COL32(120, 120, 130, 220), 6.0f, 0, 1.0f);
+    dl->AddText(ImVec2(pos.x + pad.x, pos.y + pad.y), ImGui::ColorConvertFloat4ToU32(m_toastColor),
+                m_toastMsg.c_str());
+}
+
+void AppInfoPanel::installApks(const std::string& deviceSerial, std::vector<std::string> paths) {
+    if (paths.empty() || deviceSerial.empty() || m_installing.load()) return;
+    m_installing.store(true);
+    m_pendingRefresh.store(false);
+    {
+        std::lock_guard<std::mutex> lock(m_installMutex);
+        m_installStatus = InstallStatus{};
+        m_installStatus.total = static_cast<int>(paths.size());
+    }
+    m_lastNotifiedDone = 0;
+    showToast(paths.size() == 1
+                  ? "开始安装: " + fileNameOf(paths[0])
+                  : "开始安装 " + std::to_string(paths.size()) + " 个 APK...",
+              ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+
+    std::thread([this, deviceSerial, paths = std::move(paths)]() {
+        int done = 0;
+        for (const auto& path : paths) {
+            {
+                std::lock_guard<std::mutex> lock(m_installMutex);
+                m_installStatus.currentFile = path;
+                m_installStatus.message.clear();
+            }
+
+            std::string out;
+            AdbProcess proc;
+            proc.start({"-s", deviceSerial, "install", "-r", path},
+                [&](const std::string& line) { out += line + "\n"; });
+            proc.waitForExit(120000);
+            proc.stop();
+
+            bool ok = out.find("Success") != std::string::npos;
+            {
+                std::lock_guard<std::mutex> lock(m_installMutex);
+                m_installStatus.done = ++done;
+                m_installStatus.lastFailed = !ok;
+                m_installStatus.message = ok ? "Success" : (out.empty() ? "No output (install timed out?)" : out);
+            }
+        }
+        m_installing.store(false);
+        m_pendingRefresh.store(true);
+    }).detach();
+}
 
 void AppInfoPanel::refreshAppList(const std::string& deviceSerial) {
     if (deviceSerial.empty() || m_loading.load()) return;
@@ -136,6 +245,30 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
         m_apps.clear();
     }
 
+    // --- Consume dropped .apk files (drag-and-drop install) ---
+    {
+        std::vector<std::string> pending;
+        {
+            std::lock_guard<std::mutex> lock(g_dropMutex);
+            for (auto it = g_droppedFiles.begin(); it != g_droppedFiles.end();) {
+                if (endsWithLower(*it, ".apk")) {
+                    pending.push_back(*it);
+                    it = g_droppedFiles.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        if (!pending.empty()) {
+            installApks(deviceSerial, std::move(pending));
+        }
+    }
+
+    // Refresh list once after an install batch finishes
+    if (m_pendingRefresh.exchange(false) && !deviceSerial.empty() && !m_loading.load()) {
+        refreshAppList(deviceSerial);
+    }
+
     // --- Top controls ---
     ImGui::AlignTextToFramePadding();
 
@@ -161,6 +294,60 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
         refreshAppList(deviceSerial);
     }
 
+    ImGui::SameLine();
+    if (ImGui::Button("Install APK")) {
+        std::string apk = pickApkFile();
+        if (!apk.empty()) {
+            installApks(deviceSerial, {apk});
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Select an APK file to install to the device");
+    }
+
+    // End-of-batch toast (fires once per batch)
+    {
+        std::lock_guard<std::mutex> lock(m_installMutex);
+        if (!m_installing.load() && m_installStatus.done > 0 &&
+            m_installStatus.done >= m_installStatus.total &&
+            m_lastNotifiedDone != m_installStatus.done) {
+            m_lastNotifiedDone = m_installStatus.done;
+            if (m_installStatus.lastFailed) {
+                std::string msg = "安装失败: " + m_installStatus.message;
+                if (msg.size() > 120) msg = msg.substr(0, 120) + "...";
+                showToast(msg, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            } else {
+                showToast("安装完成 (共 " + std::to_string(m_installStatus.done) + " 个)",
+                          ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+            }
+        }
+    }
+
+    // --- Install status (full line, wrapped so it is never truncated) ---
+    {
+        std::lock_guard<std::mutex> lock(m_installMutex);
+        if (m_installing.load()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f),
+                               "Installing: %s (%d/%d)...",
+                               m_installStatus.currentFile.c_str(),
+                               m_installStatus.done, m_installStatus.total);
+            float frac = m_installStatus.total > 0
+                             ? static_cast<float>(m_installStatus.done) / m_installStatus.total
+                             : 0.0f;
+            char pct[32];
+            std::snprintf(pct, sizeof(pct), "%.0f%%", frac * 100.0f);
+            ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.0f), pct);
+        } else if (m_installStatus.done > 0 && !m_installStatus.message.empty()) {
+            if (m_installStatus.lastFailed) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Install failed:");
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", m_installStatus.message.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Install OK");
+            }
+        }
+    }
+
     // Auto-load: if list is empty, trigger refresh
     bool needRefresh = false;
     {
@@ -183,10 +370,9 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
     }
 
     // Filter
-    ImGui::SameLine();
     ImGui::TextUnformatted("Filter:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(200);
+    ImGui::SetNextItemWidth(320);
     char filterBuf[256] = {};
     if (!m_textFilter.empty()) {
         std::strncpy(filterBuf, m_textFilter.c_str(), sizeof(filterBuf) - 1);
@@ -306,4 +492,6 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
         ImGui::EndTable();
     }
     ImGui::EndChild();
+
+    renderToast();
 }

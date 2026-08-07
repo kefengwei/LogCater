@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include "imgui.h"
 
 class Settings;
 
@@ -36,5 +37,28 @@ private:
     std::string m_textFilter;
     std::string m_lastDeviceSerial;
 
+    // APK install (drag-and-drop)
+    std::atomic<bool> m_installing{false};
+    std::atomic<bool> m_pendingRefresh{false};
+    struct InstallStatus {
+        std::string currentFile;
+        std::string message;
+        int done = 0;
+        int total = 0;
+        bool lastFailed = false;
+    };
+    InstallStatus m_installStatus;
+    std::mutex m_installMutex;
+    int m_lastNotifiedDone = 0;   // completed count already shown in a toast
+
+    // Toast banner
+    std::string m_toastMsg;
+    ImVec4 m_toastColor = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+    float m_toastEndTime = 0.0f;
+
+    void showToast(const std::string& msg, const ImVec4& color);
+    void renderToast();
+
     void refreshAppList(const std::string& deviceSerial);
+    void installApks(const std::string& deviceSerial, std::vector<std::string> paths);
 };

@@ -1,7 +1,13 @@
 #include "LogcatPanel.h"
 #include "adb/DeviceManager.h"
+#include "core/AdbProcess.h"
 #include "core/Settings.h"
+#include "util/StringUtils.h"
 #include "imgui.h"
+#include <thread>
+#include <Windows.h>
+#include <commdlg.h>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 
@@ -11,27 +17,57 @@ LogcatPanel::~LogcatPanel() { stop(); }
 void LogcatPanel::start(const std::string& deviceSerial) {
     stop();
     m_pausedDeviceSerial = deviceSerial;
+    m_currentSerial = deviceSerial;
     m_displayEntries.clear();
     m_lastPushed = 0; m_lastRefreshTime = -1.0;
     m_selectedIndex = -1; m_showDetail = false; m_contextIndex = -1;
     m_autoScroll = true; m_userScrolledSinceDisable = false; m_pendingNew = 0; m_paused = false;
-    m_reader.start(deviceSerial, m_logBuffer);
+    m_reader.start(deviceSerial, m_logBuffer, m_bufferName);
 }
 void LogcatPanel::stop() { m_reader.stop(); m_paused = false; }
 bool LogcatPanel::isRunning() const { return m_reader.isRunning() || m_paused; }
 void LogcatPanel::pause() { if (!m_reader.isRunning()) return; m_reader.stop(); m_paused = true; }
-void LogcatPanel::resume() { if (!m_paused) return; m_paused = false; m_reader.start(m_pausedDeviceSerial, m_logBuffer); }
+void LogcatPanel::resume() { if (!m_paused) return; m_paused = false; m_reader.start(m_pausedDeviceSerial, m_logBuffer, m_bufferName); }
 void LogcatPanel::clearLogs() {
     m_logBuffer.clear(); m_displayEntries.clear();
     m_lastPushed = 0; m_lastRefreshTime = -1.0; m_selectedIndex = -1; m_pendingNew = 0;
     m_showDetail = false; m_contextIndex = -1;
     m_userScrolledSinceDisable = false;
 }
+
+void LogcatPanel::exportLogs() {
+    if (m_displayEntries.empty()) return;
+
+    char path[MAX_PATH] = {};
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    std::snprintf(path, sizeof(path), "logcat_%04d%02d%02d_%02d%02d%02d.txt",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "Log Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = "txt";
+    ofn.lpstrTitle = "Export filtered logs";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+
+    if (!GetSaveFileNameA(&ofn)) return;
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) return;
+    for (const auto& e : m_displayEntries) {
+        file << e.raw << "\n";
+    }
+}
 void LogcatPanel::onDeviceDisconnected() { stop(); clearLogs(); }
 bool LogcatPanel::filtersChanged() const {
     return m_lastTextFilter != m_filterBar.textFilter()
         || m_lastTagFilter != m_filterBar.tagFilter()
-        || m_lastLevelMask != m_filterBar.levelMask();
+        || m_lastLevelMask != m_filterBar.levelMask()
+        || m_lastTimeFrom != m_filterBar.timeFromFilter()
+        || m_lastExcludeTag != m_filterBar.excludeTag();
 }
 bool LogcatPanel::dataChanged() const { return m_logBuffer.totalPushed() != m_lastPushed; }
 
@@ -40,7 +76,8 @@ void LogcatPanel::refreshDisplay() {
     newEntries.reserve(MAX_DISPLAY);
     m_logBuffer.query(newEntries,
         m_filterBar.textFilter(), m_filterBar.tagFilter(),
-        m_filterBar.levelMask(), MAX_DISPLAY);
+        m_filterBar.levelMask(), MAX_DISPLAY,
+        m_filterBar.timeFromFilter(), m_filterBar.excludeTag());
 
     // Enrich with process names
     if (m_dm) {
@@ -56,6 +93,8 @@ void LogcatPanel::refreshDisplay() {
     m_lastTextFilter = m_filterBar.textFilter();
     m_lastTagFilter = m_filterBar.tagFilter();
     m_lastLevelMask = m_filterBar.levelMask();
+    m_lastTimeFrom = m_filterBar.timeFromFilter();
+    m_lastExcludeTag = m_filterBar.excludeTag();
     m_lastPushed = m_logBuffer.totalPushed();
     m_lastRefreshTime = ImGui::GetTime();
     m_pendingNew = 0;
@@ -156,6 +195,25 @@ static void RenderDetailPanel(const LogEntry& entry) {
 
 // ── main render ──
 void LogcatPanel::render(Settings& settings) {
+    // Parse highlight keywords once per frame
+    std::vector<std::string> keywords;
+    if (!settings.highlightKeywords.empty()) {
+        size_t start = 0;
+        while (start <= settings.highlightKeywords.size()) {
+            size_t end = settings.highlightKeywords.find(',', start);
+            if (end == std::string::npos) end = settings.highlightKeywords.size();
+            std::string kw = settings.highlightKeywords.substr(start, end - start);
+            // trim
+            size_t b = kw.find_first_not_of(" \t\r\n");
+            size_t e = kw.find_last_not_of(" \t\r\n");
+            if (b != std::string::npos && e >= b) {
+                kw = kw.substr(b, e - b + 1);
+                if (!kw.empty()) keywords.push_back(kw);
+            }
+            start = end + 1;
+        }
+    }
+
     // ── Filter row ──
     m_filterBar.render(settings);
 
@@ -172,7 +230,52 @@ void LogcatPanel::render(Settings& settings) {
     ImGui::SameLine();
     if (ImGui::Button("Clear")) clearLogs();
     ImGui::SameLine();
+    if (ImGui::Button("Export")) exportLogs();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Save currently filtered logs to a .txt file");
+    ImGui::SameLine();
     if (ImGui::Button(m_showDetail ? "Hide Details" : "Show Details")) m_showDetail = !m_showDetail;
+
+    // Logcat buffer selector
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    const char* bufferNames[] = {"default", "main", "system", "crash", "all"};
+    int curBuf = 0;
+    for (int i = 0; i < 5; i++) {
+        if (m_bufferName == bufferNames[i]) { curBuf = i; break; }
+    }
+    if (ImGui::BeginCombo("##logBuffer", bufferNames[curBuf])) {
+        for (int i = 0; i < 5; i++) {
+            if (ImGui::Selectable(bufferNames[i], i == curBuf)) {
+                std::string newBuf = bufferNames[i];
+                if (newBuf != m_bufferName) {
+                    m_bufferName = newBuf;
+                    clearLogs();
+                    if (!m_currentSerial.empty()) {
+                        m_reader.start(m_currentSerial, m_logBuffer, m_bufferName);
+                        m_paused = false;
+                    }
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Select logcat buffer");
+
+    // Clear device-side log buffer
+    ImGui::SameLine();
+    if (ImGui::Button("Clear Dev Buffer") && !m_currentSerial.empty()) {
+        std::thread([serial = m_currentSerial]() {
+            AdbProcess proc;
+            proc.start({"-s", serial, "logcat", "-c"}, [](const std::string&) {});
+            proc.waitForExit(5000);
+            proc.stop();
+        }).detach();
+        clearLogs();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Clear the device's logcat buffer (adb logcat -c)");
 
     // ── Stats ──
     ImGui::SameLine();
@@ -236,6 +339,14 @@ void LogcatPanel::render(Settings& settings) {
 
                 if (isSel)
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(36, 84, 54, 255));
+                else if (!keywords.empty()) {
+                    for (const auto& kw : keywords) {
+                        if (util::icontains(entry.message, kw) || util::icontains(entry.tag, kw)) {
+                            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(72, 62, 20, 255));
+                            break;
+                        }
+                    }
+                }
 
                 // Row interaction (selectable spans all columns)
                 ImGui::TableSetColumnIndex(0);
@@ -351,6 +462,10 @@ void LogcatPanel::render(Settings& settings) {
             if (ImGui::MenuItem("Copy Message")) ImGui::SetClipboardText(e.message.c_str());
             if (ImGui::MenuItem("Copy Raw Line")) ImGui::SetClipboardText(e.raw.c_str());
             if (!e.tag.empty() && ImGui::MenuItem("Copy Tag")) ImGui::SetClipboardText(e.tag.c_str());
+            if (!e.tag.empty() && ImGui::MenuItem("Exclude Tag")) {
+                m_filterBar.setExcludeTag(e.tag);
+                refreshDisplay();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Clear Logs")) clearLogs();
         }

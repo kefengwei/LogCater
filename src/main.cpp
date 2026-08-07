@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <mutex>
 #include <vector>
+#include <shellapi.h>
+#include <CommCtrl.h>
 #include "resource.h"
 
 // Use main() as entry point even with /SUBSYSTEM:WINDOWS
@@ -19,6 +21,7 @@
 #include "Application.h"
 #include "core/Settings.h"
 #include "core/LogBuffer.h"
+#include "resource.h"
 
 // Global queue for files dropped from OS
 std::vector<std::string> g_droppedFiles;
@@ -35,12 +38,97 @@ static void glfw_error_callback(int error, const char* description) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
+// ─── System tray ─────────────────────────────────────────────────
+static HWND g_hwnd = nullptr;
+static WNDPROC g_origWndProc = nullptr;
+static NOTIFYICONDATAW g_nid = {};
+static bool g_exitRequested = false;
+static constexpr UINT WM_TRAYICON = WM_APP + 1;
+
+static void showTrayMenu() {
+    POINT pt;
+    GetCursorPos(&pt);
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, 1, L"Show LogCater");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 2, L"Exit");
+    SetForegroundWindow(g_hwnd);
+    UINT cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                              pt.x, pt.y, 0, g_hwnd, nullptr);
+    DestroyMenu(menu);
+    if (cmd == 1) {
+        ShowWindow(g_hwnd, SW_SHOW);
+        SetForegroundWindow(g_hwnd);
+    } else if (cmd == 2) {
+        g_exitRequested = true;
+    }
+}
+
+static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_TRAYICON) {
+        if (lp == WM_LBUTTONDBLCLK) {
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+        } else if (lp == WM_RBUTTONUP) {
+            showTrayMenu();
+        }
+        return 0;
+    }
+    return CallWindowProcW(g_origWndProc, hwnd, msg, wp, lp);
+}
+
+static void initTray(HWND hwnd) {
+    g_hwnd = hwnd;
+    g_origWndProc = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(TrayWndProc)));
+
+    g_nid = {};
+    g_nid.cbSize = sizeof(g_nid);
+    g_nid.hWnd = hwnd;
+    g_nid.uID = 1;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAYICON;
+    g_nid.hIcon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr),
+        MAKEINTRESOURCEW(IDI_ICON1), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
+    wcscpy_s(g_nid.szTip, L"LogCater");
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+}
+
 static constexpr float BASE_FONT_SIZE = 18.0f;
 
 /// Pending font scale — applied at the start of the next frame.
 /// Font atlas rebuild MUST happen BEFORE ImGui::NewFrame(),
 /// because NewFrame() caches font pointers from the atlas.
 static float g_pendingFontScale = -1.0f;
+static int g_pendingTheme = -1;
+static ImGuiStyle g_baseStyle;   // snapshot of the active theme at 1.0x
+
+static void applyDarkTheme();     // defined below (custom dark palette)
+
+/// Apply colors/padding for the given theme and refresh the base-style snapshot.
+static void applyTheme(int theme) {
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (theme == 1) {
+        ImGui::StyleColorsLight(&style);
+    } else {
+        applyDarkTheme();
+    }
+    // Custom padding (shared across themes)
+    style.FramePadding     = ImVec2(7.0f, 5.0f);
+    style.ItemSpacing      = ImVec2(10.0f, 6.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+    style.CellPadding      = ImVec2(6.0f, 4.0f);
+    style.WindowPadding    = ImVec2(10.0f, 10.0f);
+    style.TabRounding      = 4.0f;
+    style.FrameRounding    = 3.0f;
+    g_baseStyle = style;
+}
+
+/// Called by MainWindow when the user toggles theme. Applied before the next frame.
+extern "C" void LogCaterRequestTheme(int theme) {
+    g_pendingTheme = theme;
+}
 
 /// Apply a professional dark theme (Android-green accent).
 static void applyDarkTheme() {
@@ -172,6 +260,12 @@ int main(int, char**) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetDropCallback(window, glfw_drop_callback);
+    // Closing the window hides it to the tray instead of quitting;
+    // use the tray menu "Exit" to actually quit.
+    glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
+        glfwHideWindow(w);
+        glfwSetWindowShouldClose(w, GLFW_FALSE);
+    });
 
     // Set window icon from embedded resource (GLFW defaults to IDI_APPLICATION)
     {
@@ -184,6 +278,7 @@ int main(int, char**) {
             IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
         if (hIconBig)  SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconBig);
         if (hIconSmall) SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
+        initTray(hwnd);
     }
 
     // --- Setup Dear ImGui ---
@@ -203,26 +298,12 @@ int main(int, char**) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    // Apply style tweaks (before ScaleAllSizes so they scale with zoom)
-    {
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.FramePadding     = ImVec2(7.0f, 5.0f);    // buttons, tabs
-        style.ItemSpacing      = ImVec2(10.0f, 6.0f);   // widget spacing
-        style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);    // inner spacing
-        style.CellPadding      = ImVec2(6.0f, 4.0f);    // table cells
-        style.WindowPadding    = ImVec2(10.0f, 10.0f);  // window edges
-        style.TabRounding      = 4.0f;
-        style.FrameRounding    = 3.0f;
-    }
-    applyDarkTheme();
+    // Apply theme + custom padding (before ScaleAllSizes so they scale with zoom)
+    applyTheme(settings.uiTheme);
 
     // Apply style spacing to match font scale
     ImGui::GetStyle().ScaleAllSizes(settings.uiScale);
 
-    // Snapshot the base style (custom values at 1.0x).
-    // Used to cleanly restore style on every zoom change,
-    // avoiding float drift from repeated ScaleAllSizes(1/prev) + ScaleAllSizes(new).
-    static ImGuiStyle g_baseStyle = ImGui::GetStyle();
 
     // --- Create Application ---
     Application app;
@@ -231,7 +312,7 @@ int main(int, char**) {
     // --- Main loop ---
     ImVec4 clear_color = ImVec4(0.12f, 0.12f, 0.13f, 1.00f);
 
-    while (!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(window) && !g_exitRequested) {
         glfwPollEvents();
 
         // --- Apply deferred font atlas rebuild BEFORE NewFrame ---
@@ -241,6 +322,13 @@ int main(int, char**) {
             ImGui_ImplOpenGL3_DestroyFontsTexture();
             ImGui_ImplOpenGL3_CreateFontsTexture();
             g_pendingFontScale = -1.0f;
+        }
+        // --- Apply deferred theme switch BEFORE NewFrame ---
+        if (g_pendingTheme >= 0) {
+            applyTheme(g_pendingTheme);
+            ImGui::GetStyle() = g_baseStyle;
+            ImGui::GetStyle().ScaleAllSizes(settings.uiScale);
+            g_pendingTheme = -1;
         }
 
         ImGui_ImplOpenGL3_NewFrame();
@@ -294,6 +382,7 @@ int main(int, char**) {
     }
 
     // --- Cleanup ---
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
     app.shutdown();
     settings.save(Settings::defaultPath());
 

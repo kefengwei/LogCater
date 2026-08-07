@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <regex>
+#include <vector>
 
 class AdbProcess;
 class LogBuffer;
@@ -17,7 +18,9 @@ public:
     ~LogcatReader();
 
     /// Start streaming from the selected device.
-    void start(const std::string& deviceSerial, LogBuffer& buffer);
+    /// @param bufferName  "main" | "system" | "crash" | "all" | "" (default, merged main+system+crash)
+    void start(const std::string& deviceSerial, LogBuffer& buffer,
+               const std::string& bufferName = "");
 
     /// Stop streaming and join reader thread.
     void stop();

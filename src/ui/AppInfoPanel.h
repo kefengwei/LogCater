@@ -36,6 +36,7 @@ private:
     std::atomic<int> m_totalCount{0};
     std::string m_textFilter;
     std::string m_lastDeviceSerial;
+    std::string m_contextPkg;
 
     // APK install (drag-and-drop)
     std::atomic<bool> m_installing{false};
@@ -61,4 +62,6 @@ private:
 
     void refreshAppList(const std::string& deviceSerial);
     void installApks(const std::string& deviceSerial, std::vector<std::string> paths);
+    void runPkgCommand(const std::string& deviceSerial, std::vector<std::string> args,
+                       const std::string& successMsg);
 };

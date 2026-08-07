@@ -6,6 +6,8 @@
 #include <Windows.h>
 #include <shellapi.h>
 
+extern "C" void LogCaterRequestTheme(int theme);
+
 #ifndef LOGCATER_VERSION
 #define LOGCATER_VERSION "0.0.0"
 #endif
@@ -13,12 +15,18 @@
 #define STRINGIFY(x) STRINGIFY_(x)
 
 MainWindow::MainWindow() {
-    m_deviceSelector.setOnDeviceChanged([this](const std::string& serial) {
-        m_logcatPanel.stop();
-        if (!serial.empty()) {
-            m_logcatPanel.start(serial);
-        }
-    });
+    // Logcat sessions are per-device (see logcatPanelFor); nothing to do on switch.
+    m_deviceSelector.setOnDeviceChanged([](const std::string&) {});
+}
+
+LogcatPanel& MainWindow::logcatPanelFor(const std::string& serial) {
+    auto it = m_logcatPanels.find(serial);
+    if (it == m_logcatPanels.end()) {
+        auto panel = std::make_unique<LogcatPanel>();
+        panel->start(serial);
+        it = m_logcatPanels.emplace(serial, std::move(panel)).first;
+    }
+    return *it->second;
 }
 
 void MainWindow::openReleasePage() {
@@ -87,6 +95,15 @@ void MainWindow::render(Application& app) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Open GitHub Releases page");
 
+        ImGui::SameLine();
+        if (ImGui::SmallButton(settings.uiTheme == 1 ? "Theme: Light" : "Theme: Dark")) {
+            settings.uiTheme = (settings.uiTheme == 1) ? 0 : 1;
+            settings.save(Settings::defaultPath());
+            LogCaterRequestTheme(settings.uiTheme);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Switch dark/light theme");
+
         ImGui::SameLine(ImGui::GetWindowWidth() - 190);
         ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f),
                            "LogCater v" STRINGIFY(LOGCATER_VERSION));
@@ -103,14 +120,12 @@ void MainWindow::render(Application& app) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                                    "Please select a device to start logcat.");
             } else {
-                m_logcatPanel.setDeviceManager(&dm);
-                if (!m_logcatPanel.isRunning()) {
-                    m_logcatPanel.start(selected->serial);
-                }
+                LogcatPanel& panel = logcatPanelFor(selected->serial);
+                panel.setDeviceManager(&dm);
                 if (!dm.processMapReady()) {
                     dm.refreshProcessMap(selected->serial);
                 }
-                m_logcatPanel.render(settings);
+                panel.render(settings);
             }
             ImGui::EndTabItem();
         }
@@ -169,9 +184,27 @@ void MainWindow::render(Application& app) {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Help")) {
+        if (ImGui::BeginTabItem("Shell")) {
             m_activeTab = 5;
+            auto selected = dm.selectedDevice();
+            if (!selected.has_value()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+                                   "Please select a device to open a shell.");
+            } else {
+                m_shellPanel.render(selected->serial);
+            }
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Help")) {
+            m_activeTab = 6;
             m_helpPanel.render();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Settings")) {
+            m_activeTab = 7;
+            m_settingsPanel.render(settings);
             ImGui::EndTabItem();
         }
 
@@ -208,7 +241,12 @@ void MainWindow::render(Application& app) {
     ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f), "|");
     ImGui::SameLine();
 
-    if (m_logcatPanel.isRunning()) {
+    bool logcatRunning = false;
+    if (auto sel = dm.selectedDevice()) {
+        auto it = m_logcatPanels.find(sel->serial);
+        logcatRunning = it != m_logcatPanels.end() && it->second->isRunning();
+    }
+    if (logcatRunning) {
         ImGui::TextColored(ImVec4(0.24f, 0.86f, 0.52f, 1.0f), "● Logcat: Running");
     } else {
         ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f), "○ Logcat: Stopped");

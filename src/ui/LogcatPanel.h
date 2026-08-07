@@ -26,6 +26,7 @@ public:
     void resume();
     bool isPaused() const { return m_paused; }
     void clearLogs();
+    void exportLogs();
 
     FilterBar& filterBar() { return m_filterBar; }
 
@@ -41,6 +42,8 @@ private:
 
     bool m_paused = false;
     std::string m_pausedDeviceSerial;
+    std::string m_currentSerial;   // device currently streamed from
+    std::string m_bufferName;      // "main" | "system" | "crash" | "all" | "" (default)
     int m_selectedIndex = -1;
     bool m_showDetail = false;
     int m_contextIndex = -1;
@@ -51,6 +54,8 @@ private:
 
     std::string m_lastTextFilter;
     std::string m_lastTagFilter;
+    std::string m_lastTimeFrom;
+    std::string m_lastExcludeTag;
     uint8_t m_lastLevelMask = 0x3F;
     size_t m_lastPushed = 0;
     double m_lastRefreshTime = -1.0;

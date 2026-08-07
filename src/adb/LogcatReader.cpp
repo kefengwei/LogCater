@@ -10,7 +10,8 @@ LogcatReader::~LogcatReader() {
     stop();
 }
 
-void LogcatReader::start(const std::string& deviceSerial, LogBuffer& buffer) {
+void LogcatReader::start(const std::string& deviceSerial, LogBuffer& buffer,
+                         const std::string& bufferName) {
     if (m_running.load()) return;
 
     m_buffer = &buffer;
@@ -20,8 +21,12 @@ void LogcatReader::start(const std::string& deviceSerial, LogBuffer& buffer) {
     m_skippedLines.store(0);
     m_process = std::make_unique<AdbProcess>();
 
-    bool ok = m_process->start(
-        {"-s", deviceSerial, "logcat", "-v", "threadtime"},
+    std::vector<std::string> args = {"-s", deviceSerial, "logcat", "-v", "threadtime"};
+    if (!bufferName.empty()) {
+        args.push_back("-b");
+        args.push_back(bufferName);
+    }
+    bool ok = m_process->start(args,
         [this](const std::string& line) { onLogLine(line); });
 
     if (ok) {

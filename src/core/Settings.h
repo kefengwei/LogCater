@@ -35,6 +35,12 @@ public:
     // UI zoom
     float uiScale = 1.0f;
 
+    // UI theme: 0 = dark, 1 = light
+    int uiTheme = 0;
+
+    // Logcat highlight keywords (comma separated)
+    std::string highlightKeywords;
+
     void load(const std::string& path);
     void save(const std::string& path) const;
     void addTagToHistory(const std::string& tag);

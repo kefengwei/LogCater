@@ -121,6 +121,18 @@ if(ADB_EXECUTABLE)
     )
 endif()
 
+# --- Tests ---
+enable_testing()
+add_executable(logcater_tests
+    tests/test_core.cpp
+    src/core/LogBuffer.cpp
+    src/util/Timestamp.cpp
+    src/util/StringUtils.cpp
+)
+target_include_directories(logcater_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(logcater_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_test(NAME core_tests COMMAND logcater_tests)
+
 # --- Packaging (Windows installer via CPack + NSIS) ---
 # CPack's NSIS template creates shortcuts pointing at $INSTDIR\bin\<exe>,
 # so install the executable (and its adb) under bin/.

@@ -45,6 +45,8 @@ void Settings::load(const std::string& path) {
             fileBrowserBookmarks = j["fileBrowserBookmarks"].get<std::vector<std::string>>();
         }
         if (j.contains("uiScale")) uiScale = j["uiScale"];
+        if (j.contains("uiTheme")) uiTheme = j["uiTheme"];
+        if (j.contains("highlightKeywords")) highlightKeywords = j["highlightKeywords"];
     } catch (...) {
         // Corrupted settings file, use defaults
     }
@@ -68,6 +70,8 @@ void Settings::save(const std::string& path) const {
         j["adbPath"] = adbPath;
         j["fileBrowserBookmarks"] = fileBrowserBookmarks;
         j["uiScale"] = uiScale;
+        j["uiTheme"] = uiTheme;
+        j["highlightKeywords"] = highlightKeywords;
 
         std::ofstream file(path);
         if (file.is_open()) {

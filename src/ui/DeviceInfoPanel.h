@@ -2,6 +2,8 @@
 
 #include <string>
 #include <atomic>
+#include <mutex>
+#include <vector>
 
 /// Device information dashboard — battery, storage, memory, system info at a glance.
 /// Runs multiple ADB commands on a background thread; results displayed as cards.
@@ -47,11 +49,58 @@ private:
 
     Info m_info;
     std::atomic<bool> m_loading{false};
+    std::atomic<bool> m_actionRunning{false};
+    std::string m_actionMsg;
+    float m_actionMsgEnd = 0.0f;
     bool m_hasData = false;
     float m_lastRefreshTime = 0.0f;
     static constexpr float AUTO_REFRESH_INTERVAL = 10.0f;
+    int m_recordSeconds = 30;
+
+    // Dumpsys viewer
+    int m_dumpsysChoice = 0;
+    std::string m_dumpsysOutput;
+    std::atomic<bool> m_dumpsysLoading{false};
+
+    // FPS monitor (gfxinfo polling)
+    char m_fpsPkg[128] = {};
+    std::atomic<bool> m_fpsRunning{false};
+    std::atomic<bool> m_fpsStop{false};
+    std::mutex m_fpsMutex;
+    std::vector<float> m_fpsHistory;   // recent FPS samples (oldest first)
+    long long m_fpsTotal = 0;
+    long long m_fpsJanky = 0;
+
+    void startFpsMonitor(const std::string& deviceSerial);
+    void stopFpsMonitor();
+
+    // Monkey smoke test
+    char m_monkeyPkg[128] = {};
+    int m_monkeyCount = 1000;
+    std::string m_monkeyOutput;
+    std::atomic<bool> m_monkeyRunning{false};
+    std::atomic<bool> m_monkeyStop{false};
+
+    void startMonkey(const std::string& deviceSerial);
+    void stopMonkey(const std::string& deviceSerial);
+
+    // Port forwarding
+    char m_fwdLocal[16] = {};
+    char m_fwdRemote[16] = {};
+    char m_revLocal[16] = {};
+    char m_revRemote[16] = {};
+    std::string m_forwardOutput;
+
+    void refreshForwards(const std::string& deviceSerial);
+    void addForward(const std::string& deviceSerial, bool reverse);
+    void removeAllForwards(const std::string& deviceSerial, bool reverse);
 
     void refresh(const std::string& deviceSerial);
+    void takeScreenshot(const std::string& deviceSerial);
+    void takeScreenrecord(const std::string& deviceSerial, int seconds);
+    void takeBugreport(const std::string& deviceSerial);
+    void takePerfetto(const std::string& deviceSerial, int seconds);
+    void runDumpsys(const std::string& deviceSerial, const std::string& cmd);
 
     /// Parse helpers
     static std::string getProp(const std::string& deviceSerial, const std::string& key);

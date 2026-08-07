@@ -1,6 +1,7 @@
 #include "FilterBar.h"
 #include "core/Settings.h"
 #include "imgui.h"
+#include <cctype>
 #include <cstring>
 
 static const char* kLevelNames[] = {"Verbose", "Debug", "Info", "Warning", "Error", "Fatal"};
@@ -146,5 +147,33 @@ void FilterBar::render(Settings& settings) {
             ImGui::PopStyleColor();
         }
         ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+
+    // --- Time-from filter (HH:MM:SS) ---
+    ImGui::TextUnformatted("From:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    if (m_timeFromBuf[0] == '\0' && !m_timeFromFilter.empty()) {
+        std::strncpy(m_timeFromBuf, m_timeFromFilter.c_str(), sizeof(m_timeFromBuf) - 1);
+    }
+    if (ImGui::InputTextWithHint("##timeFrom", "12:00:00", m_timeFromBuf, sizeof(m_timeFromBuf))) {
+        m_timeFromFilter = m_timeFromBuf;
+        for (char& c : m_timeFromFilter) {
+            if (!std::isdigit(static_cast<unsigned char>(c)) && c != ':') c = '\0';
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Only show logs at/after this time (HH:MM:SS). Empty = all.");
+
+    // Excluded tag indicator + clear button
+    if (!m_excludeTag.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Excluding: %s", m_excludeTag.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("X##clearExclude")) {
+            m_excludeTag.clear();
+        }
     }
 }

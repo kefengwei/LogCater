@@ -1,10 +1,378 @@
 #include "DeviceInfoPanel.h"
 #include "core/AdbProcess.h"
 #include "imgui.h"
+#include <Windows.h>
+#include <commdlg.h>
 #include <regex>
 #include <sstream>
 #include <thread>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <vector>
+#include <chrono>
+
+// ─── Screen capture helpers ───────────────────────────────────────
+
+namespace {
+
+std::string pickSavePath(const char* defaultName, const char* filter, const char* defExt) {
+    char path[MAX_PATH] = {};
+    std::snprintf(path, sizeof(path), "%s", defaultName);
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = defExt;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    return GetSaveFileNameA(&ofn) ? std::string(path) : std::string();
+}
+
+std::string timestampName(const char* prefix, const char* ext) {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[MAX_PATH];
+    std::snprintf(buf, sizeof(buf), "%s_%04d%02d%02d_%02d%02d%02d.%s",
+                  prefix, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, ext);
+    return std::string(buf);
+}
+
+} // namespace
+
+void DeviceInfoPanel::takeScreenshot(const std::string& deviceSerial) {
+    if (deviceSerial.empty() || m_actionRunning.load()) return;
+    std::string local = pickSavePath(
+        timestampName("screenshot", "png").c_str(),
+        "PNG Image (*.png)\0*.png\0All Files (*.*)\0*.*\0", "png");
+    if (local.empty()) return;
+
+    m_actionRunning.store(true);
+    m_actionMsg = "Capturing screenshot...";
+    m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
+
+    std::thread([this, deviceSerial, local]() {
+        const std::string remote = "/sdcard/logcater_shot.png";
+        {
+            AdbProcess p;
+            p.start({"-s", deviceSerial, "shell", "screencap", "-p", remote},
+                    [](const std::string&) {});
+            p.waitForExit(15000);
+            p.stop();
+        }
+        {
+            AdbProcess p;
+            std::string out;
+            p.start({"-s", deviceSerial, "pull", remote, local},
+                    [&](const std::string& l) { out += l; });
+            p.waitForExit(30000);
+            p.stop();
+            bool ok = out.find("1 file pulled") != std::string::npos;
+            m_actionMsg = ok ? "Screenshot saved: " + local
+                             : "Screenshot failed: " + (out.empty() ? "no output" : out);
+        }
+        {
+            AdbProcess p;
+            p.start({"-s", deviceSerial, "shell", "rm", "-f", remote},
+                    [](const std::string&) {});
+            p.waitForExit(5000);
+            p.stop();
+        }
+        m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
+        m_actionRunning.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::takeScreenrecord(const std::string& deviceSerial, int seconds) {
+    if (deviceSerial.empty() || m_actionRunning.load()) return;
+    if (seconds < 3) seconds = 3;
+    if (seconds > 180) seconds = 180;
+    std::string local = pickSavePath(
+        timestampName("screenrecord", "mp4").c_str(),
+        "MP4 Video (*.mp4)\0*.mp4\0All Files (*.*)\0*.*\0", "mp4");
+    if (local.empty()) return;
+
+    m_actionRunning.store(true);
+    m_actionMsg = "Recording for " + std::to_string(seconds) + "s...";
+    m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
+
+    std::thread([this, deviceSerial, local, seconds]() {
+        const std::string remote = "/sdcard/logcater_rec.mp4";
+        {
+            AdbProcess p;
+            p.start({"-s", deviceSerial, "shell", "screenrecord",
+                     "--time-limit", std::to_string(seconds), remote},
+                    [](const std::string&) {});
+            p.waitForExit(static_cast<DWORD>(seconds * 1000 + 10000));
+            p.stop();
+        }
+        {
+            AdbProcess p;
+            std::string out;
+            p.start({"-s", deviceSerial, "pull", remote, local},
+                    [&](const std::string& l) { out += l; });
+            p.waitForExit(60000);
+            p.stop();
+            bool ok = out.find("1 file pulled") != std::string::npos;
+            m_actionMsg = ok ? "Recording saved: " + local
+                             : "Recording failed: " + (out.empty() ? "no output" : out);
+        }
+        {
+            AdbProcess p;
+            p.start({"-s", deviceSerial, "shell", "rm", "-f", remote},
+                    [](const std::string&) {});
+            p.waitForExit(5000);
+            p.stop();
+        }
+        m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
+        m_actionRunning.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::runDumpsys(const std::string& deviceSerial, const std::string& cmd) {
+    if (deviceSerial.empty() || m_dumpsysLoading.load()) return;
+    m_dumpsysLoading.store(true);
+    m_dumpsysOutput = "Running: adb shell dumpsys " + cmd + " ...\n";
+
+    std::thread([this, deviceSerial, cmd]() {
+        std::string out;
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, "shell", "dumpsys", cmd},
+                   [&](const std::string& l) { out += l + "\n"; });
+        proc.waitForExit(15000);
+        proc.stop();
+        m_dumpsysOutput = out.empty() ? "(no output)" : out;
+        m_dumpsysLoading.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::takeBugreport(const std::string& deviceSerial) {
+    if (deviceSerial.empty() || m_actionRunning.load()) return;
+    std::string local = pickSavePath(
+        timestampName("bugreport", "zip").c_str(),
+        "Bugreport ZIP (*.zip)\0*.zip\0All Files (*.*)\0*.*\0", "zip");
+    if (local.empty()) return;
+
+    m_actionRunning.store(true);
+    m_actionMsg = "Collecting bugreport (may take a minute)...";
+    m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
+
+    std::thread([this, deviceSerial, local]() {
+        std::string out;
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, "bugreport", local},
+                   [&](const std::string& l) { out += l; });
+        proc.waitForExit(180000);
+        proc.stop();
+        bool ok = out.find("Bugreport") != std::string::npos ||
+                  out.find("saved") != std::string::npos ||
+                  out.empty(); // bugreport prints progress; empty output usually means file written
+        m_actionMsg = ok ? "Bugreport saved: " + local
+                         : "Bugreport failed: " + (out.empty() ? "no output" : out);
+        m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 12.0f;
+        m_actionRunning.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::takePerfetto(const std::string& deviceSerial, int seconds) {
+    if (deviceSerial.empty() || m_actionRunning.load()) return;
+    if (seconds < 3) seconds = 3;
+    if (seconds > 120) seconds = 120;
+    std::string local = pickSavePath(
+        timestampName("trace", "perfetto-trace").c_str(),
+        "Perfetto Trace (*.perfetto-trace)\0*.perfetto-trace\0All Files (*.*)\0*.*\0",
+        "perfetto-trace");
+    if (local.empty()) return;
+
+    m_actionRunning.store(true);
+    m_actionMsg = "Capturing " + std::to_string(seconds) + "s Perfetto trace...";
+    m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 3.0f;
+
+    std::thread([this, deviceSerial, local, seconds]() {
+        const std::string remote = "/data/misc/perfetto-traces/logcater_trace.perfetto-trace";
+        {
+            AdbProcess p;
+            p.start({"-s", deviceSerial, "shell", "perfetto",
+                     "-o", remote, "-t", std::to_string(seconds) + "s",
+                     "sched", "freq", "idle"},
+                    [](const std::string&) {});
+            p.waitForExit(static_cast<DWORD>(seconds * 1000 + 15000));
+            p.stop();
+        }
+        {
+            AdbProcess p;
+            std::string out;
+            p.start({"-s", deviceSerial, "pull", remote, local},
+                    [&](const std::string& l) { out += l; });
+            p.waitForExit(60000);
+            p.stop();
+            bool ok = out.find("1 file pulled") != std::string::npos;
+            m_actionMsg = ok ? "Trace saved: " + local
+                             : "Trace failed: " + (out.empty() ? "no output (may need shell permission)" : out);
+        }
+        {
+            AdbProcess p;
+            p.start({"-s", deviceSerial, "shell", "rm", "-f", remote},
+                    [](const std::string&) {});
+            p.waitForExit(5000);
+            p.stop();
+        }
+        m_actionMsgEnd = static_cast<float>(ImGui::GetTime()) + 8.0f;
+        m_actionRunning.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::startFpsMonitor(const std::string& deviceSerial) {
+    if (deviceSerial.empty() || m_fpsRunning.load()) return;
+    std::string pkg(m_fpsPkg);
+    // trim
+    size_t b = pkg.find_first_not_of(" \t\r\n");
+    size_t e = pkg.find_last_not_of(" \t\r\n");
+    if (b == std::string::npos || e < b) return;
+    pkg = pkg.substr(b, e - b + 1);
+    if (pkg.empty()) return;
+
+    m_fpsRunning.store(true);
+    m_fpsStop.store(false);
+    {
+        std::lock_guard<std::mutex> lock(m_fpsMutex);
+        m_fpsHistory.clear();
+        m_fpsTotal = 0;
+        m_fpsJanky = 0;
+    }
+
+    std::thread([this, deviceSerial, pkg]() {
+        long long lastTotal = -1;
+        auto lastTime = std::chrono::steady_clock::now();
+        while (!m_fpsStop.load()) {
+            std::string out;
+            AdbProcess proc;
+            proc.start({"-s", deviceSerial, "shell", "dumpsys", "gfxinfo", pkg},
+                       [&](const std::string& l) { out += l + "\n"; });
+            proc.waitForExit(8000);
+            proc.stop();
+
+            long long total = -1, janky = -1;
+            std::istringstream iss(out);
+            std::string line;
+            while (std::getline(iss, line)) {
+                size_t p = line.find("Total frames rendered:");
+                if (p != std::string::npos) total = std::atoll(line.c_str() + p + 22);
+                p = line.find("Janky frames:");
+                if (p != std::string::npos) janky = std::atoll(line.c_str() + p + 13);
+            }
+            if (total >= 0) {
+                auto now = std::chrono::steady_clock::now();
+                std::lock_guard<std::mutex> lock(m_fpsMutex);
+                if (lastTotal >= 0) {
+                    double secs = std::chrono::duration<double>(now - lastTime).count();
+                    if (secs > 0.5) {
+                        float fps = static_cast<float>((total - lastTotal) / secs);
+                        m_fpsHistory.push_back(fps);
+                        if (m_fpsHistory.size() > 120) m_fpsHistory.erase(m_fpsHistory.begin());
+                    }
+                }
+                m_fpsTotal = total;
+                m_fpsJanky = janky;
+                lastTotal = total;
+                lastTime = now;
+            }
+            // Poll every 2s
+            for (int i = 0; i < 20 && !m_fpsStop.load(); i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+        m_fpsRunning.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::stopFpsMonitor() {
+    m_fpsStop.store(true);
+}
+
+void DeviceInfoPanel::startMonkey(const std::string& deviceSerial) {
+    if (deviceSerial.empty() || m_monkeyRunning.load()) return;
+    std::string pkg(m_monkeyPkg);
+    size_t b = pkg.find_first_not_of(" \t\r\n");
+    size_t e = pkg.find_last_not_of(" \t\r\n");
+    if (b == std::string::npos || e < b) return;
+    pkg = pkg.substr(b, e - b + 1);
+    if (pkg.empty()) return;
+
+    m_monkeyRunning.store(true);
+    m_monkeyStop.store(false);
+    m_monkeyOutput = "Starting monkey on " + pkg + " (" + std::to_string(m_monkeyCount) + " events)...\n";
+
+    std::thread([this, deviceSerial, pkg]() {
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, "shell", "monkey", "-p", pkg,
+                    "--throttle", "100", std::to_string(m_monkeyCount)},
+                   [this](const std::string& line) {
+                       m_monkeyOutput += line + "\n";
+                   });
+        // Poll stop flag while waiting (monkey can take a while)
+        while (!m_monkeyStop.load() && proc.isRunning()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        if (m_monkeyStop.load()) {
+            proc.stop();
+            m_monkeyOutput += "\n[stopped by user]\n";
+        } else {
+            proc.waitForExit(600000);
+            proc.stop();
+            m_monkeyOutput += "\n[done]\n";
+        }
+        m_monkeyRunning.store(false);
+    }).detach();
+}
+
+void DeviceInfoPanel::stopMonkey(const std::string& deviceSerial) {
+    m_monkeyStop.store(true);
+}
+
+void DeviceInfoPanel::refreshForwards(const std::string& deviceSerial) {
+    std::thread([this, deviceSerial]() {
+        std::string out;
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, "forward", "--list"},
+                   [&](const std::string& l) { out += l + "\n"; });
+        proc.waitForExit(5000);
+        proc.stop();
+        m_forwardOutput = out.empty() ? "(no forward rules)" : out;
+    }).detach();
+}
+
+void DeviceInfoPanel::addForward(const std::string& deviceSerial, bool reverse) {
+    const char* local = reverse ? m_revLocal : m_fwdLocal;
+    const char* remote = reverse ? m_revRemote : m_fwdRemote;
+    if (std::strlen(local) == 0 || std::strlen(remote) == 0) return;
+
+    std::string l = "tcp:" + std::string(local);
+    std::string r = "tcp:" + std::string(remote);
+    std::thread([this, deviceSerial, l, r, reverse]() {
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, reverse ? "reverse" : "forward", l, r},
+                   [](const std::string&) {});
+        proc.waitForExit(5000);
+        proc.stop();
+        refreshForwards(deviceSerial);
+    }).detach();
+    if (!reverse) { m_fwdLocal[0] = '\0'; m_fwdRemote[0] = '\0'; }
+    else          { m_revLocal[0] = '\0'; m_revRemote[0] = '\0'; }
+}
+
+void DeviceInfoPanel::removeAllForwards(const std::string& deviceSerial, bool reverse) {
+    std::thread([this, deviceSerial, reverse]() {
+        AdbProcess proc;
+        proc.start({"-s", deviceSerial, reverse ? "reverse" : "forward", "--remove-all"},
+                   [](const std::string&) {});
+        proc.waitForExit(5000);
+        proc.stop();
+        refreshForwards(deviceSerial);
+    }).detach();
+}
 
 // ─── Command helpers ───────────────────────────────────────────────
 
@@ -210,6 +578,43 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
     else
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "No data — click Refresh");
 
+    // --- Screen capture / record tools ---
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
+    if (ImGui::Button("Screenshot")) {
+        takeScreenshot(deviceSerial);
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(50);
+    ImGui::InputInt("##recSec", &m_recordSeconds);
+    if (m_recordSeconds < 3) m_recordSeconds = 3;
+    if (m_recordSeconds > 180) m_recordSeconds = 180;
+    ImGui::SameLine();
+    if (ImGui::Button("Record")) {
+        takeScreenrecord(deviceSerial, m_recordSeconds);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Bugreport")) {
+        takeBugreport(deviceSerial);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Collect a full bugreport ZIP (contains tombstones, ANR traces, dumpsys...)");
+    ImGui::SameLine();
+    if (ImGui::Button("Perfetto")) {
+        takePerfetto(deviceSerial, m_recordSeconds);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Capture a Perfetto trace (uses the seconds field, 3-120s)");
+    ImGui::SameLine();
+    if (m_actionRunning.load()) {
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "%s", m_actionMsg.c_str());
+    } else if (!m_actionMsg.empty() && ImGui::GetTime() < m_actionMsgEnd) {
+        bool failed = m_actionMsg.find("failed") != std::string::npos;
+        ImGui::TextColored(failed ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f)
+                                  : ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                           "%s", m_actionMsg.c_str());
+    }
+
     ImGui::Separator();
     if (!m_hasData) return;
 
@@ -302,5 +707,165 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
             row("Available", d.memAvailable);
             ImGui::EndTable();
         }
+    }
+
+    // ── Dumpsys Viewer ──
+    if (ImGui::CollapsingHeader("Dumpsys", ImGuiTreeNodeFlags_DefaultOpen)) {
+        static const char* cmds[] = {
+            "meminfo", "cpuinfo", "gfxinfo", "battery", "window", "activity"
+        };
+        ImGui::SetNextItemWidth(140);
+        if (ImGui::BeginCombo("##dumpsysCmd", cmds[m_dumpsysChoice])) {
+            for (int i = 0; i < 6; i++) {
+                if (ImGui::Selectable(cmds[i], i == m_dumpsysChoice)) {
+                    m_dumpsysChoice = i;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Run")) {
+            runDumpsys(deviceSerial, cmds[m_dumpsysChoice]);
+        }
+        ImGui::SameLine();
+        if (m_dumpsysLoading.load()) {
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Running...");
+        } else if (!m_dumpsysOutput.empty()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy")) {
+                ImGui::SetClipboardText(m_dumpsysOutput.c_str());
+            }
+        }
+
+        ImGui::BeginChild("DumpsysOut", ImVec2(0, 240), true,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        if (!m_dumpsysOutput.empty()) {
+            ImGui::TextUnformatted(m_dumpsysOutput.c_str());
+        }
+        ImGui::EndChild();
+    }
+
+    // ── FPS Monitor ──
+    if (ImGui::CollapsingHeader("FPS Monitor", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputTextWithHint("##fpsPkg", "package name (e.g. com.android.settings)",
+                                 m_fpsPkg, sizeof(m_fpsPkg));
+        ImGui::SameLine();
+        if (!m_fpsRunning.load()) {
+            if (ImGui::Button("Start")) {
+                startFpsMonitor(deviceSerial);
+            }
+        } else {
+            if (ImGui::Button("Stop")) {
+                stopFpsMonitor();
+            }
+        }
+
+        std::vector<float> history;
+        long long total, janky;
+        {
+            std::lock_guard<std::mutex> lock(m_fpsMutex);
+            history = m_fpsHistory;
+            total = m_fpsTotal;
+            janky = m_fpsJanky;
+        }
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                           "Total frames: %lld | Janky: %lld (%.1f%%)",
+                           total, janky,
+                           total > 0 ? (100.0 * janky / total) : 0.0);
+
+        // Simple line chart of recent FPS
+        float chartW = ImGui::GetContentRegionAvail().x;
+        float chartH = 80.0f;
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImVec2 p1(p0.x + chartW, p0.y + chartH);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p0, p1, IM_COL32(20, 20, 24, 220));
+        if (!history.empty()) {
+            float maxFps = 120.0f;
+            float minFps = 0.0f;
+            float stepX = chartW / static_cast<float>(history.size());
+            for (size_t i = 1; i < history.size(); i++) {
+                float y0 = p1.y - (history[i - 1] - minFps) / (maxFps - minFps) * chartH;
+                float y1 = p1.y - (history[i] - minFps) / (maxFps - minFps) * chartH;
+                dl->AddLine(ImVec2(p0.x + (i - 1) * stepX, y0),
+                            ImVec2(p0.x + i * stepX, y1),
+                            IM_COL32(70, 200, 120, 255), 2.0f);
+            }
+        } else {
+            dl->AddText(ImVec2(p0.x + 8, p0.y + chartH / 2 - 8),
+                        IM_COL32(120, 120, 120, 200), "No samples yet");
+        }
+        ImGui::Dummy(ImVec2(chartW, chartH));
+    }
+
+    // ── Monkey Smoke Test ──
+    if (ImGui::CollapsingHeader("Monkey Test", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SetNextItemWidth(220);
+        ImGui::InputTextWithHint("##monkeyPkg", "package name",
+                                 m_monkeyPkg, sizeof(m_monkeyPkg));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70);
+        ImGui::InputInt("##monkeyCount", &m_monkeyCount);
+        if (m_monkeyCount < 1) m_monkeyCount = 1;
+        ImGui::SameLine();
+        if (!m_monkeyRunning.load()) {
+            if (ImGui::Button("Start Monkey")) {
+                startMonkey(deviceSerial);
+            }
+        } else {
+            if (ImGui::Button("Stop Monkey")) {
+                stopMonkey(deviceSerial);
+            }
+        }
+
+        ImGui::BeginChild("MonkeyOut", ImVec2(0, 140), true,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        if (!m_monkeyOutput.empty()) {
+            ImGui::TextUnformatted(m_monkeyOutput.c_str());
+            ImGui::SetScrollHereY(1.0f);
+        }
+        ImGui::EndChild();
+    }
+
+    // ── Port Forwarding ──
+    if (ImGui::CollapsingHeader("Port Forwarding", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Forward
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Forward (device listens):");
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputTextWithHint("##fwdL", "local", m_fwdLocal, sizeof(m_fwdLocal));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("->");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputTextWithHint("##fwdR", "remote", m_fwdRemote, sizeof(m_fwdRemote));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Add Forward")) addForward(deviceSerial, false);
+
+        // Reverse
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Reverse (PC listens):");
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputTextWithHint("##revL", "local", m_revLocal, sizeof(m_revLocal));
+        ImGui::SameLine();
+        ImGui::TextUnformatted("->");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputTextWithHint("##revR", "remote", m_revRemote, sizeof(m_revRemote));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Add Reverse")) addForward(deviceSerial, true);
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Refresh")) refreshForwards(deviceSerial);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove All")) removeAllForwards(deviceSerial, false);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reverse Remove All")) removeAllForwards(deviceSerial, true);
+
+        ImGui::BeginChild("FwdOut", ImVec2(0, 100), true,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        if (!m_forwardOutput.empty()) {
+            ImGui::TextUnformatted(m_forwardOutput.c_str());
+        }
+        ImGui::EndChild();
     }
 }

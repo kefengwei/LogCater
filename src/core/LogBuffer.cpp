@@ -53,7 +53,11 @@ int LogBuffer::levelToInt(char level) {
 bool LogBuffer::matches(const LogEntry& entry,
                          const std::string& textFilter,
                          const std::string& tagFilter,
-                         uint8_t levelMask) {
+                         uint8_t levelMask,
+                         const std::string& timeFrom,
+                         const std::string& excludeTag) {
+    // Excluded tag: skip entries with this exact tag
+    if (!excludeTag.empty() && entry.tag == excludeTag) return false;
     // Multi-tag filter: split by ';', match if entry tag matches ANY (OR logic).
     // Whitespace around tags is trimmed; empty segments are ignored.
     if (!tagFilter.empty()) {
@@ -81,6 +85,11 @@ bool LogBuffer::matches(const LogEntry& entry,
     }
     // Check level bitmask
     if (!(levelMask & (1 << levelToInt(entry.level)))) return false;
+    // Time filter: raw starts with "MM-DD HH:MM:SS.mmm ..."; time is at offset 6, length 8.
+    if (!timeFrom.empty()) {
+        if (entry.raw.size() < 14) return false;
+        if (entry.raw.substr(6, 8) < timeFrom) return false;
+    }
     if (!textFilter.empty()) {
         const char* needle = textFilter.c_str();
         int ndlLen = static_cast<int>(textFilter.size());
@@ -109,7 +118,9 @@ bool LogBuffer::matches(const LogEntry& entry,
 void LogBuffer::queryPositions(std::vector<size_t>& out,
                                 const std::string& textFilter,
                                 const std::string& tagFilter,
-                                uint8_t levelMask) const {
+                                uint8_t levelMask,
+                                const std::string& timeFrom,
+                                const std::string& excludeTag) const {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
 
     size_t count = std::min(m_totalCount, m_ring.size());
@@ -123,7 +134,7 @@ void LogBuffer::queryPositions(std::vector<size_t>& out,
 
     for (size_t i = 0; i < count; i++) {
         size_t idx = (startPos + i) % m_ring.size();
-        if (matches(m_ring[idx], textFilter, tagFilter, levelMask)) {
+        if (matches(m_ring[idx], textFilter, tagFilter, levelMask, timeFrom, excludeTag)) {
             out.push_back(idx);
         }
     }
@@ -147,7 +158,9 @@ void LogBuffer::query(std::vector<LogEntry>& out,
                       const std::string& textFilter,
                       const std::string& tagFilter,
                       uint8_t levelMask,
-                      size_t maxResults) const {
+                      size_t maxResults,
+                      const std::string& timeFrom,
+                      const std::string& excludeTag) const {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
 
     size_t count = std::min(m_totalCount, m_ring.size());
@@ -163,7 +176,7 @@ void LogBuffer::query(std::vector<LogEntry>& out,
 
     for (size_t i = 0; i < count; i++) {
         size_t idx = (newestPos + m_ring.size() - i) % m_ring.size();
-        if (matches(m_ring[idx], textFilter, tagFilter, levelMask)) {
+        if (matches(m_ring[idx], textFilter, tagFilter, levelMask, timeFrom, excludeTag)) {
             temp.push_back(m_ring[idx]);
             if (maxResults > 0 && temp.size() >= maxResults) break;
         }

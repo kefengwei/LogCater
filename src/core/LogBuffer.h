@@ -29,17 +29,22 @@ public:
     /// Query: copies matching entries (newest first, then reversed to oldest→newest).
     /// @param levelMask  bitmask: bit0=V, bit1=D, bit2=I, bit3=W, bit4=E, bit5=F
     /// @param maxResults  if > 0, stops after collecting this many (most recent).
+    /// @param timeFrom   "HH:MM:SS" — only entries at/after this time (empty = no filter).
     void query(std::vector<LogEntry>& out,
                const std::string& textFilter = "",
                const std::string& tagFilter = "",
                uint8_t levelMask = 0x3F,
-               size_t maxResults = 0) const;
+               size_t maxResults = 0,
+               const std::string& timeFrom = "",
+               const std::string& excludeTag = "") const;
 
     /// Query: stores only ring-buffer positions of matching entries.
     void queryPositions(std::vector<size_t>& out,
                         const std::string& textFilter = "",
                         const std::string& tagFilter = "",
-                        uint8_t levelMask = 0x3F) const;
+                        uint8_t levelMask = 0x3F,
+                        const std::string& timeFrom = "",
+                        const std::string& excludeTag = "") const;
 
     /// Batch-copy entries at given ring positions into out.
     /// out is cleared first, then filled with copies at positions [start, start+count).
@@ -67,5 +72,7 @@ private:
     static bool matches(const LogEntry& entry,
                         const std::string& textFilter,
                         const std::string& tagFilter,
-                        uint8_t levelMask);
+                        uint8_t levelMask,
+                        const std::string& timeFrom,
+                        const std::string& excludeTag);
 };

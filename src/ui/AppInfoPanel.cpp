@@ -54,15 +54,25 @@ AppInfoPanel::AppInfoPanel() = default;
 AppInfoPanel::~AppInfoPanel() = default;
 
 void AppInfoPanel::showToast(const std::string& msg, const ImVec4& color) {
+    std::lock_guard<std::mutex> lock(m_installMutex);
     m_toastMsg = msg;
     m_toastColor = color;
     m_toastEndTime = static_cast<float>(ImGui::GetTime()) + 4.0f;
 }
 
 void AppInfoPanel::renderToast() {
-    if (m_toastMsg.empty() || ImGui::GetTime() >= m_toastEndTime) return;
+    std::string msg;
+    ImVec4 color;
+    float endTime = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(m_installMutex);
+        msg = m_toastMsg;
+        color = m_toastColor;
+        endTime = m_toastEndTime;
+    }
+    if (msg.empty() || ImGui::GetTime() >= endTime) return;
 
-    const ImVec2 textSize = ImGui::CalcTextSize(m_toastMsg.c_str());
+    const ImVec2 textSize = ImGui::CalcTextSize(msg.c_str());
     const ImVec2 pad(24.0f, 12.0f);
     const ImVec2 size(textSize.x + pad.x * 2.0f, textSize.y + pad.y * 2.0f);
     const ImVec2 pos((ImGui::GetWindowWidth() - size.x) * 0.5f, 48.0f);
@@ -72,8 +82,8 @@ void AppInfoPanel::renderToast() {
                       IM_COL32(30, 30, 34, 235), 6.0f);
     dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
                 IM_COL32(120, 120, 130, 220), 6.0f, 0, 1.0f);
-    dl->AddText(ImVec2(pos.x + pad.x, pos.y + pad.y), ImGui::ColorConvertFloat4ToU32(m_toastColor),
-                m_toastMsg.c_str());
+    dl->AddText(ImVec2(pos.x + pad.x, pos.y + pad.y), ImGui::ColorConvertFloat4ToU32(color),
+                msg.c_str());
 }
 
 void AppInfoPanel::installApks(const std::string& deviceSerial, std::vector<std::string> paths) {
@@ -117,6 +127,23 @@ void AppInfoPanel::installApks(const std::string& deviceSerial, std::vector<std:
         }
         m_installing.store(false);
         m_pendingRefresh.store(true);
+    }).detach();
+}
+
+void AppInfoPanel::runPkgCommand(const std::string& deviceSerial, std::vector<std::string> args,
+                                 const std::string& successMsg) {
+    std::thread([this, deviceSerial, args = std::move(args), successMsg]() {
+        std::string out;
+        AdbProcess proc;
+        proc.start(args, [&](const std::string& line) { out += line + "\n"; });
+        proc.waitForExit(20000);
+        proc.stop();
+        bool ok = out.find("Error") == std::string::npos &&
+                  out.find("Exception") == std::string::npos &&
+                  out.find("Failure") == std::string::npos &&
+                  out.find("Failed") == std::string::npos;
+        showToast(ok ? successMsg : ("命令失败: " + (out.empty() ? "no output" : out)),
+                  ok ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f) : ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
     }).detach();
 }
 
@@ -455,15 +482,19 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "...");
             }
 
-            ImGui::TableNextColumn();
-            // Selectable full-row: click to copy package name
-            if (ImGui::Selectable(app.packageName.c_str(), false,
-                                  ImGuiSelectableFlags_SpanAllColumns)) {
-                ImGui::SetClipboardText(app.packageName.c_str());
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Click to copy package name");
-            }
+        ImGui::TableNextColumn();
+        // Selectable full-row: click to copy package name
+        if (ImGui::Selectable(app.packageName.c_str(), false,
+                              ImGuiSelectableFlags_SpanAllColumns)) {
+            ImGui::SetClipboardText(app.packageName.c_str());
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Click to copy package name");
+        }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            m_contextPkg = app.packageName;
+            ImGui::OpenPopup("AppRowContext");
+        }
 
             ImGui::TableNextColumn();
             if (app.detailsLoaded) {
@@ -486,8 +517,36 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "...");
             }
 
-            ImGui::PopID();
+        ImGui::PopID();
+    }
+
+    // Row context menu: process management
+    if (ImGui::BeginPopup("AppRowContext")) {
+        if (!m_contextPkg.empty()) {
+            ImGui::TextUnformatted(m_contextPkg.c_str());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Force Stop")) {
+                runPkgCommand(deviceSerial, {"-s", deviceSerial, "shell", "am", "force-stop", m_contextPkg},
+                              "已强制停止: " + m_contextPkg);
+            }
+            if (ImGui::MenuItem("Start App")) {
+                runPkgCommand(deviceSerial,
+                              {"-s", deviceSerial, "shell", "monkey", "-p", m_contextPkg,
+                               "-c", "android.intent.category.LAUNCHER", "1"},
+                              "已启动: " + m_contextPkg);
+            }
+            if (ImGui::MenuItem("Clear Data")) {
+                runPkgCommand(deviceSerial, {"-s", deviceSerial, "shell", "pm", "clear", m_contextPkg},
+                              "已清除数据: " + m_contextPkg);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Uninstall")) {
+                runPkgCommand(deviceSerial, {"-s", deviceSerial, "uninstall", m_contextPkg},
+                              "已卸载: " + m_contextPkg);
+            }
         }
+        ImGui::EndPopup();
+    }
 
         ImGui::EndTable();
     }

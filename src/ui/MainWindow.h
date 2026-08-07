@@ -36,6 +36,7 @@ private:
     std::map<std::string, std::unique_ptr<LogcatPanel>> m_logcatPanels;
     int m_activeTab = 0;
     bool m_firstFrame = true;
+    bool m_activateLogcatTab = false;
 
     void openReleasePage();
     LogcatPanel& logcatPanelFor(const std::string& serial);

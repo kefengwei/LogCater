@@ -130,6 +130,14 @@ extern "C" void LogCaterRequestTheme(int theme) {
     g_pendingTheme = theme;
 }
 
+/// Called by MainWindow when a new device connects: show/restore the window.
+extern "C" void LogCaterShowWindow() {
+    if (!g_hwnd) return;
+    ShowWindow(g_hwnd, SW_SHOW);
+    if (IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
+    SetForegroundWindow(g_hwnd);
+}
+
 /// Apply a professional dark theme (Android-green accent).
 static void applyDarkTheme() {
     ImGuiStyle& style = ImGui::GetStyle();

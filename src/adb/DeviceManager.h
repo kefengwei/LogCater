@@ -33,6 +33,11 @@ public:
     bool hasDevice() const;
     bool hasSelectedDevice() const;
 
+    /// True when a device not seen before appeared in the latest refresh.
+    /// The flag is cleared once read.
+    bool consumeNewDeviceFlag();
+    std::string lastNewDeviceSerial() const;
+
     /// Set to true when async refresh completes.
     bool refreshDone() const;
     void clearRefreshFlag();
@@ -61,6 +66,9 @@ public:
 private:
     std::vector<Device> m_devices;
     std::string m_selectedSerial;
+    std::vector<std::string> m_knownSerials;
+    std::string m_newDeviceSerial;
+    std::atomic<bool> m_newDeviceFlag{false};
     mutable std::mutex m_mutex;
     std::atomic<bool> m_refreshDone{false};
     std::atomic<bool> m_refreshing{false};

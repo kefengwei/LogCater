@@ -7,6 +7,7 @@
 #include <shellapi.h>
 
 extern "C" void LogCaterRequestTheme(int theme);
+extern "C" void LogCaterShowWindow();
 
 #ifndef LOGCATER_VERSION
 #define LOGCATER_VERSION "0.0.0"
@@ -38,6 +39,17 @@ void MainWindow::openReleasePage() {
 void MainWindow::render(Application& app) {
     auto& dm = app.deviceManager();
     auto& settings = app.settings();
+
+    // New device connected → auto-select it, activate the Logcat tab, and
+    // bring the window to the foreground (even from the tray).
+    if (dm.consumeNewDeviceFlag()) {
+        std::string serial = dm.lastNewDeviceSerial();
+        if (!serial.empty()) {
+            dm.selectDevice(serial);
+            m_activateLogcatTab = true;
+            LogCaterShowWindow();
+        }
+    }
 
     if (m_firstFrame) {
         m_firstFrame = false;
@@ -113,8 +125,11 @@ void MainWindow::render(Application& app) {
 
     // --- Tab bar ---
     if (ImGui::BeginTabBar("MainTabs")) {
-        if (ImGui::BeginTabItem("Logcat")) {
+        ImGuiTabItemFlags logcatTabFlags = m_activateLogcatTab
+            ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        if (ImGui::BeginTabItem("Logcat", nullptr, logcatTabFlags)) {
             m_activeTab = 0;
+            m_activateLogcatTab = false;
             auto selected = dm.selectedDevice();
             if (!selected.has_value()) {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),

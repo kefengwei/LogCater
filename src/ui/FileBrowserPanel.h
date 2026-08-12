@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include "imgui.h"
 
 class AdbProcess;
@@ -34,7 +35,7 @@ private:
 
     // File listing
     std::vector<FileEntry> m_entries;
-    bool m_loading = false;
+    std::atomic<bool> m_loading{false};
     std::string m_error;
 
     // File content viewer
@@ -44,6 +45,14 @@ private:
     bool m_contentLoading = false;
     // Cached parsed lines for virtual scrolling (text, color)
     std::vector<std::pair<std::string, ImVec4>> m_contentLines;
+
+    // Thread-safe render snapshots (background threads write, UI reads)
+    mutable std::mutex m_stateMutex;
+    std::atomic<bool> m_listDirty{true};
+    std::atomic<bool> m_contentDirty{true};
+    std::vector<FileEntry> m_renderEntries;
+    std::vector<std::pair<std::string, ImVec4>> m_renderLines;
+    std::string m_renderError;
 
     void navigateTo(const std::string& deviceSerial, const std::string& path);
     void goUp();

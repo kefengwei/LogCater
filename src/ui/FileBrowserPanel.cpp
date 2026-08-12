@@ -148,10 +148,16 @@ void FileBrowserPanel::refreshListing(const std::string& deviceSerial) {
         std::vector<FileEntry> entries;
         std::string error;
         if (runLs(deviceSerial, m_currentPath, entries, error)) {
-            m_entries = std::move(entries);
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_entries = std::move(entries);
+                m_error.clear();
+            }
         } else {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
             m_error = error;
         }
+        m_listDirty.store(true);
         m_loading = false;
     }).detach();
 }
@@ -211,7 +217,11 @@ void FileBrowserPanel::viewFile(const std::string& deviceSerial,
             parsed.emplace_back(std::move(line), color);
         }
 
-        m_contentLines = std::move(parsed);
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_contentLines = std::move(parsed);
+        }
+        m_contentDirty.store(true);
         m_contentLoading = false;
     }).detach();
 }
@@ -266,8 +276,14 @@ void FileBrowserPanel::uploadFile(const std::string& deviceSerial, const std::st
         std::vector<FileEntry> entries;
         std::string error;
         if (runLs(deviceSerial, m_currentPath, entries, error)) {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
             m_entries = std::move(entries);
+            m_error.clear();
+        } else {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_error = error;
         }
+        m_listDirty.store(true);
         m_loading = false;
     }).detach();
 }
@@ -484,14 +500,21 @@ void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm
         return;
     }
 
+    // Refresh render snapshots from the background thread (once per change)
+    if (m_listDirty.exchange(false)) {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_renderEntries = m_entries;
+        m_renderError = m_error;
+    }
+
     if (m_loading) {
         ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.0f, 1.0f), "Loading...");
         return;
     }
 
-    if (!m_error.empty()) {
+    if (!m_renderError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        ImGui::TextWrapped("%s", m_error.c_str());
+        ImGui::TextWrapped("%s", m_renderError.c_str());
         ImGui::PopStyleColor();
         return;
     }
@@ -525,8 +548,8 @@ void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm
             ImGui::TableNextColumn();
         }
 
-        for (size_t i = 0; i < m_entries.size(); i++) {
-            const auto& entry = m_entries[i];
+        for (size_t i = 0; i < m_renderEntries.size(); i++) {
+            const auto& entry = m_renderEntries[i];
             ImGui::PushID(static_cast<int>(i));
 
             ImGui::TableNextRow();
@@ -606,19 +629,25 @@ void FileBrowserPanel::render(const std::string& deviceSerial, DeviceManager& dm
         ImGui::TextUnformatted(m_contentTitle.c_str());
         ImGui::Separator();
 
+        // Refresh content snapshot from the background thread
+        if (m_contentDirty.exchange(false)) {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_renderLines = m_contentLines;
+        }
+
         if (m_contentLoading) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 1.0f, 1.0f), "Loading...");
-        } else if (!m_contentLines.empty()) {
+        } else if (!m_renderLines.empty()) {
             // Virtual-scrolled colorized log view
-            int totalLines = static_cast<int>(m_contentLines.size());
+            int totalLines = static_cast<int>(m_renderLines.size());
             ImGui::BeginChild("##fileContent", ImVec2(0, -30), false,
                               ImGuiWindowFlags_HorizontalScrollbar);
             ImGuiListClipper clipper;
             clipper.Begin(totalLines, ImGui::GetTextLineHeightWithSpacing());
             while (clipper.Step()) {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
-                    ImGui::TextColored(m_contentLines[i].second, "%s",
-                                       m_contentLines[i].first.c_str());
+                    ImGui::TextColored(m_renderLines[i].second, "%s",
+                                       m_renderLines[i].first.c_str());
                 }
             }
             clipper.End();

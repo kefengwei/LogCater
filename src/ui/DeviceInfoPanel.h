@@ -82,6 +82,8 @@ private:
     std::string m_monkeyOutput;
     std::atomic<bool> m_monkeyRunning{false};
     std::atomic<bool> m_monkeyStop{false};
+    std::atomic<bool> m_monkeyDirty{false};
+    std::string m_renderMonkeyOutput;
 
     void startMonkey(const std::string& deviceSerial);
     void stopMonkey(const std::string& deviceSerial);

@@ -336,7 +336,10 @@ void DeviceInfoPanel::runDumpsys(const std::string& deviceSerial, const std::str
                    [&](const std::string& l) { out += l + "\n"; });
         proc.waitForExit(15000);
         proc.stop();
-        m_dumpsysOutput = out.empty() ? "(no output)" : out;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_dumpsysOutput = out.empty() ? "(no output)" : out;
+        }
         m_dumpsysLoading.store(false);
     }).detach();
 }
@@ -506,13 +509,16 @@ void DeviceInfoPanel::startMonkey(const std::string& deviceSerial) {
     m_monkeyRunning.store(true);
     m_monkeyStop.store(false);
     m_monkeyOutput = "Starting monkey on " + pkg + " (" + std::to_string(m_monkeyCount) + " events)...\n";
+    m_monkeyDirty.store(true);
 
     std::thread([this, deviceSerial, pkg]() {
         AdbProcess proc;
         proc.start({"-s", deviceSerial, "shell", "monkey", "-p", pkg,
                     "--throttle", "100", std::to_string(m_monkeyCount)},
                    [this](const std::string& line) {
+                       std::lock_guard<std::mutex> lock(m_stateMutex);
                        m_monkeyOutput += line + "\n";
+                       m_monkeyDirty.store(true);
                    });
         // Poll stop flag while waiting (monkey can take a while)
         while (!m_monkeyStop.load() && proc.isRunning()) {
@@ -520,11 +526,19 @@ void DeviceInfoPanel::startMonkey(const std::string& deviceSerial) {
         }
         if (m_monkeyStop.load()) {
             proc.stop();
-            m_monkeyOutput += "\n[stopped by user]\n";
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_monkeyOutput += "\n[stopped by user]\n";
+                m_monkeyDirty.store(true);
+            }
         } else {
             proc.waitForExit(600000);
             proc.stop();
-            m_monkeyOutput += "\n[done]\n";
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_monkeyOutput += "\n[done]\n";
+                m_monkeyDirty.store(true);
+            }
         }
         m_monkeyRunning.store(false);
     }).detach();
@@ -940,17 +954,22 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
         ImGui::SameLine();
         if (m_dumpsysLoading.load()) {
             ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Running...");
-        } else if (!m_dumpsysOutput.empty()) {
+        std::string dumpsysOut;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            dumpsysOut = m_dumpsysOutput;
+        }
+        if (!dumpsysOut.empty()) {
             ImGui::SameLine();
             if (ImGui::SmallButton("Copy")) {
-                ImGui::SetClipboardText(m_dumpsysOutput.c_str());
+                ImGui::SetClipboardText(dumpsysOut.c_str());
             }
         }
 
         ImGui::BeginChild("DumpsysOut", ImVec2(0, 240), true,
                           ImGuiWindowFlags_HorizontalScrollbar);
-        if (!m_dumpsysOutput.empty()) {
-            ImGui::TextUnformatted(m_dumpsysOutput.c_str());
+        if (!dumpsysOut.empty()) {
+            ImGui::TextUnformatted(dumpsysOut.c_str());
         }
         ImGui::EndChild();
     }
@@ -1029,10 +1048,15 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
             }
         }
 
+        // Snapshot monkey output (refreshed only when it changes)
+        if (m_monkeyDirty.exchange(false)) {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_renderMonkeyOutput = m_monkeyOutput;
+        }
         ImGui::BeginChild("MonkeyOut", ImVec2(0, 140), true,
                           ImGuiWindowFlags_HorizontalScrollbar);
-        if (!m_monkeyOutput.empty()) {
-            ImGui::TextUnformatted(m_monkeyOutput.c_str());
+        if (!m_renderMonkeyOutput.empty()) {
+            ImGui::TextUnformatted(m_renderMonkeyOutput.c_str());
             ImGui::SetScrollHereY(1.0f);
         }
         ImGui::EndChild();

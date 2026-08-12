@@ -10,6 +10,7 @@
 #include <fstream>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 LogcatPanel::LogcatPanel() { m_displayEntries.reserve(MAX_DISPLAY); }
 LogcatPanel::~LogcatPanel() { stop(); }
@@ -22,6 +23,7 @@ void LogcatPanel::start(const std::string& deviceSerial) {
     m_lastPushed = 0; m_lastRefreshTime = -1.0;
     m_selectedIndex = -1; m_showDetail = false; m_contextIndex = -1;
     m_autoScroll = true; m_userScrolledSinceDisable = false; m_pendingNew = 0; m_paused = false;
+    m_selectedRows.clear(); m_selectionAnchor = -1;
     m_reader.start(deviceSerial, m_logBuffer, m_bufferName);
 }
 void LogcatPanel::stop() { m_reader.stop(); m_paused = false; }
@@ -33,6 +35,7 @@ void LogcatPanel::clearLogs() {
     m_lastPushed = 0; m_lastRefreshTime = -1.0; m_selectedIndex = -1; m_pendingNew = 0;
     m_showDetail = false; m_contextIndex = -1;
     m_userScrolledSinceDisable = false;
+    m_selectedRows.clear(); m_selectionAnchor = -1;
 }
 
 void LogcatPanel::exportLogs() {
@@ -90,6 +93,12 @@ void LogcatPanel::refreshDisplay() {
 
     if (m_selectedIndex >= (int)m_displayEntries.size())
         m_selectedIndex = m_displayEntries.empty() ? -1 : (int)m_displayEntries.size() - 1;
+    // Clamp multi-selection to the new list size
+    m_selectedRows.erase(
+        std::remove_if(m_selectedRows.begin(), m_selectedRows.end(),
+                       [this](int idx) { return idx < 0 || idx >= (int)m_displayEntries.size(); }),
+        m_selectedRows.end());
+    if (m_selectedRows.size() <= 1) m_selectionAnchor = m_selectedRows.empty() ? -1 : m_selectedRows[0];
     m_lastTextFilter = m_filterBar.textFilter();
     m_lastTagFilter = m_filterBar.tagFilter();
     m_lastLevelMask = m_filterBar.levelMask();
@@ -104,7 +113,23 @@ void LogcatPanel::enableAutoScroll() {
     m_autoScroll = true;
     m_selectedIndex = -1; // live view and a frozen selection are mutually exclusive
     m_userScrolledSinceDisable = false;
+    m_selectedRows.clear(); m_selectionAnchor = -1;
+    m_showDetail = false;
     refreshDisplay();
+}
+
+void LogcatPanel::copySelectedRows() {
+    if (m_selectedRows.empty()) return;
+    std::string text;
+    for (int idx : m_selectedRows) {
+        if (idx >= 0 && idx < (int)m_displayEntries.size()) {
+            if (!text.empty()) text += "\n";
+            text += m_displayEntries[idx].raw;
+        }
+    }
+    if (!text.empty()) {
+        ImGui::SetClipboardText(text.c_str());
+    }
 }
 
 // ── helpers ──
@@ -282,6 +307,11 @@ void LogcatPanel::render(Settings& settings) {
     size_t total = m_logBuffer.size();
     ImGui::TextColored(ImVec4(0.57f, 0.60f, 0.64f, 1.0f),
         "Total: %zu / %zu | Filtered: %zu", total, m_logBuffer.DEFAULT_CAPACITY, m_displayEntries.size());
+    if (!m_selectedRows.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.6f, 1.0f),
+                           "| %d selected (Ctrl+C to copy)", (int)m_selectedRows.size());
+    }
     if (m_pendingNew > 0) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.80f, 0.25f, 1.0f), "| +%zu new", m_pendingNew);
@@ -333,7 +363,7 @@ void LogcatPanel::render(Settings& settings) {
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
                 const auto& entry = m_displayEntries[i];
-                bool isSel = (i == m_selectedIndex);
+                bool isSel = std::binary_search(m_selectedRows.begin(), m_selectedRows.end(), i);
                 ImGui::PushID(i);
                 ImGui::TableNextRow(ImGuiTableRowFlags_None, rowH);
 
@@ -352,12 +382,40 @@ void LogcatPanel::render(Settings& settings) {
                 ImGui::TableSetColumnIndex(0);
                 ImVec2 cell0Pos = ImGui::GetCursorScreenPos(); // capture before selectable
                 if (ImGui::Selectable("##row", isSel, ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, rowH))) {
-                    if (i == m_selectedIndex) {
-                        m_selectedIndex = -1;   // deselect → unfreeze and show latest
-                        deselectThisFrame = true;
+                    ImGuiIO& io = ImGui::GetIO();
+                    if (io.KeyCtrl) {
+                        // Toggle single row (multi-select)
+                        auto it = std::find(m_selectedRows.begin(), m_selectedRows.end(), i);
+                        if (it != m_selectedRows.end()) {
+                            m_selectedRows.erase(it);
+                        } else {
+                            m_selectedRows.push_back(i);
+                            std::sort(m_selectedRows.begin(), m_selectedRows.end());
+                        }
+                        m_selectionAnchor = i;
+                        m_selectedIndex = -1;
+                        m_showDetail = false;
+                    } else if (io.KeyShift && m_selectionAnchor >= 0) {
+                        // Range select from anchor
+                        int a = m_selectionAnchor, b = i;
+                        if (a > b) std::swap(a, b);
+                        m_selectedRows.clear();
+                        for (int k = a; k <= b; k++) m_selectedRows.push_back(k);
+                        m_selectedIndex = -1;
+                        m_showDetail = false;
                     } else {
-                        m_selectedIndex = i;    // select → freeze + show detail
-                        m_showDetail = true;
+                        // Plain click: single-select (or deselect if already the only one)
+                        if (m_selectedRows.size() == 1 && m_selectedRows[0] == i) {
+                            m_selectedRows.clear();
+                            m_selectionAnchor = -1;
+                            m_selectedIndex = -1;
+                            deselectThisFrame = true;
+                        } else {
+                            m_selectedRows = {i};
+                            m_selectionAnchor = i;
+                            m_selectedIndex = i;    // select → freeze + show detail
+                            m_showDetail = true;
+                        }
                         m_autoScroll = false;
                         m_userScrolledSinceDisable = false;
                     }
@@ -452,6 +510,14 @@ void LogcatPanel::render(Settings& settings) {
     }
     ImGui::EndChild();
 
+    // Ctrl+C: copy all selected rows (raw lines)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C) && !m_selectedRows.empty()) {
+            copySelectedRows();
+        }
+    }
+
     if (deselectThisFrame) refreshDisplay();
 
     // ── Row context menu ──
@@ -459,6 +525,10 @@ void LogcatPanel::render(Settings& settings) {
     if (ImGui::BeginPopup("LogRowContext")) {
         if (m_contextIndex >= 0 && m_contextIndex < (int)m_displayEntries.size()) {
             const auto& e = m_displayEntries[m_contextIndex];
+            if (m_selectedRows.size() > 1) {
+                if (ImGui::MenuItem("Copy Selected Rows")) copySelectedRows();
+                ImGui::Separator();
+            }
             if (ImGui::MenuItem("Copy Message")) ImGui::SetClipboardText(e.message.c_str());
             if (ImGui::MenuItem("Copy Raw Line")) ImGui::SetClipboardText(e.raw.c_str());
             if (!e.tag.empty() && ImGui::MenuItem("Copy Tag")) ImGui::SetClipboardText(e.tag.c_str());

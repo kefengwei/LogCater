@@ -47,6 +47,8 @@ private:
     int m_selectedIndex = -1;
     bool m_showDetail = false;
     int m_contextIndex = -1;
+    std::vector<int> m_selectedRows;   // sorted selected row indices (multi-select)
+    int m_selectionAnchor = -1;        // anchor for Shift+click range selection
 
     std::vector<LogEntry> m_displayEntries;
     static constexpr size_t MAX_DISPLAY = 10000;
@@ -65,6 +67,7 @@ private:
     bool dataChanged() const;
     void refreshDisplay();
     void enableAutoScroll();
+    void copySelectedRows();
 
 public:
     void render(Settings& settings);

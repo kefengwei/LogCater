@@ -954,6 +954,7 @@ void DeviceInfoPanel::render(const std::string& deviceSerial) {
         ImGui::SameLine();
         if (m_dumpsysLoading.load()) {
             ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Running...");
+        }
         std::string dumpsysOut;
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);

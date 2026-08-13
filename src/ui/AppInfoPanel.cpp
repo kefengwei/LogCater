@@ -333,6 +333,9 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
     }
 
     // End-of-batch toast (fires once per batch)
+    bool finishDetected = false;
+    std::string finishMsg;
+    ImVec4 finishColor;
     {
         std::lock_guard<std::mutex> lock(m_installMutex);
         if (!m_installing.load() && m_installStatus.done > 0 &&
@@ -340,14 +343,18 @@ void AppInfoPanel::render(const std::string& deviceSerial) {
             m_lastNotifiedDone != m_installStatus.done) {
             m_lastNotifiedDone = m_installStatus.done;
             if (m_installStatus.lastFailed) {
-                std::string msg = "安装失败: " + m_installStatus.message;
-                if (msg.size() > 120) msg = msg.substr(0, 120) + "...";
-                showToast(msg, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                finishMsg = "安装失败: " + m_installStatus.message;
+                if (finishMsg.size() > 120) finishMsg = finishMsg.substr(0, 120) + "...";
+                finishColor = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
             } else {
-                showToast("安装完成 (共 " + std::to_string(m_installStatus.done) + " 个)",
-                          ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+                finishMsg = "安装完成 (共 " + std::to_string(m_installStatus.done) + " 个)";
+                finishColor = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
             }
+            finishDetected = true;
         }
+    }
+    if (finishDetected) {
+        showToast(finishMsg, finishColor);
     }
 
     // --- Install status (full line, wrapped so it is never truncated) ---
